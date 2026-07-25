@@ -1,0 +1,192 @@
+import { Router } from 'express';
+import { z } from 'zod';
+import { loadConfig } from './config.ts';
+import { commandHistory, GitPolicyError } from './git.ts';
+import { discoverRepos, resolveRepo, summarise, localBranches, clearRepoCache } from './services/discover.ts';
+import { buildPipeline } from './services/pipeline.ts';
+import { buildMatrix } from './services/matrix.ts';
+import { simulateCherryPick } from './services/dryrun.ts';
+import { logCommits } from './services/commits.ts';
+import {
+  cherryPick,
+  merge,
+  operationStatus,
+  continueOperation,
+  abortOperation,
+  previewCommands,
+} from './services/ops.ts';
+
+const shaSchema = z.string().regex(/^[0-9a-f]{7,40}$/i, 'Not a git object id');
+const branchSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  // Reject anything that could be read as an option or a path escape.
+  .refine((s) => !s.startsWith('-') && !s.includes('..') && !/[\0\n\r]/.test(s), {
+    message: 'Invalid branch name',
+  });
+
+export const router = Router();
+
+function fail(res: import('express').Response, err: unknown): void {
+  const status = err instanceof GitPolicyError ? 403 : 400;
+  res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
+}
+
+router.get('/config', (_req, res) => {
+  const cfg = loadConfig();
+  res.json({
+    scanRoot: cfg.scanRoot,
+    chain: cfg.chain,
+    jiraBaseUrl: cfg.jiraBaseUrl,
+    ticketPattern: cfg.ticketPattern,
+  });
+});
+
+router.get('/commands', (_req, res) => {
+  res.json(commandHistory());
+});
+
+router.get('/repos', async (req, res) => {
+  try {
+    if (req.query.refresh === '1') clearRepoCache();
+    const repos = await discoverRepos(req.query.refresh === '1');
+    res.json(await Promise.all(repos.map(summarise)));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.get('/repos/:id/branches', async (req, res) => {
+  try {
+    const repo = await resolveRepo(req.params.id);
+    const [branches, summary] = await Promise.all([
+      localBranches(repo.path),
+      summarise(repo),
+    ]);
+    res.json({ branches, ...summary });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.get('/repos/:id/pipeline', async (req, res) => {
+  try {
+    const repo = await resolveRepo(req.params.id);
+    res.json(await buildPipeline(repo.path));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.get('/repos/:id/release-status', async (req, res) => {
+  try {
+    const branch = branchSchema.parse(req.query.branch);
+    const repo = await resolveRepo(req.params.id);
+    res.json(await buildMatrix(repo.id, repo.path, branch));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+const simulateSchema = z.object({
+  target: branchSchema,
+  commits: z.array(shaSchema).min(1).max(500),
+});
+
+router.post('/repos/:id/simulate', async (req, res) => {
+  try {
+    const body = simulateSchema.parse(req.body);
+    const repo = await resolveRepo(req.params.id);
+    const commits = await logCommits({
+      cwd: repo.path,
+      revs: ['--no-walk', ...body.commits],
+    });
+    // Oldest first: the order the picks would actually be applied in.
+    commits.sort((a, b) => a.date.localeCompare(b.date));
+    res.json(await simulateCherryPick({ repoPath: repo.path, target: body.target, commits }));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+const cherryPickSchema = z.object({
+  target: branchSchema,
+  commits: z.array(shaSchema).min(1).max(500),
+  style: z.enum(['individual', 'squash']).default('individual'),
+  message: z.string().max(5000).optional(),
+  dryRun: z.boolean().default(false),
+});
+
+router.post('/repos/:id/cherry-pick', async (req, res) => {
+  try {
+    const body = cherryPickSchema.parse(req.body);
+    const repo = await resolveRepo(req.params.id);
+    const result = await cherryPick({
+      repoPath: repo.path,
+      target: body.target,
+      shas: body.commits,
+      style: body.style,
+      message: body.message,
+      dryRun: body.dryRun,
+    });
+    res.json({ ...result, preview: previewCommands(result.commands) });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+const mergeSchema = z.object({
+  from: branchSchema,
+  into: branchSchema,
+  noFf: z.boolean().default(true),
+  message: z.string().max(5000).optional(),
+  dryRun: z.boolean().default(false),
+});
+
+router.post('/repos/:id/merge', async (req, res) => {
+  try {
+    const body = mergeSchema.parse(req.body);
+    const repo = await resolveRepo(req.params.id);
+    const result = await merge({
+      repoPath: repo.path,
+      from: body.from,
+      into: body.into,
+      noFf: body.noFf,
+      message: body.message,
+      dryRun: body.dryRun,
+    });
+    res.json({ ...result, preview: previewCommands(result.commands) });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.get('/repos/:id/op/status', async (req, res) => {
+  try {
+    const repo = await resolveRepo(req.params.id);
+    res.json(await operationStatus(repo.path));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.post('/repos/:id/op/continue', async (req, res) => {
+  try {
+    const repo = await resolveRepo(req.params.id);
+    const result = await continueOperation(repo.path);
+    res.json({ ...result, preview: previewCommands(result.commands) });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.post('/repos/:id/op/abort', async (req, res) => {
+  try {
+    const repo = await resolveRepo(req.params.id);
+    const result = await abortOperation(repo.path);
+    res.json({ ...result, preview: previewCommands(result.commands) });
+  } catch (err) {
+    fail(res, err);
+  }
+});

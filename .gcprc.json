@@ -1,0 +1,11 @@
+{
+  "scanRoot": "C:/Users/User/Documents/git",
+  "scanDepth": 3,
+  "chain": ["develop", "stable", "prod"],
+  "maxBranchCommits": 1000,
+  "maxTargetIndexCommits": 5000,
+  "ticketPattern": "^\\s*\\[([A-Za-z][A-Za-z0-9]*-\\d+)\\]",
+  "branchTicketPattern": "([A-Za-z][A-Za-z0-9]*-\\d+)",
+  "jiraBaseUrl": "",
+  "port": 5179
+}
