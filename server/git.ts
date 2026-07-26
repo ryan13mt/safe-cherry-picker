@@ -27,6 +27,8 @@ const READ_SUBCOMMANDS = new Set([
   'merge-tree',
   'cat-file',
   'name-rev',
+  'ls-files',
+  'blame',
   'var',
 ]);
 
@@ -43,6 +45,7 @@ const WRITE_SUBCOMMANDS = new Set([
   'reset',
   'clean',
   'add',
+  'rm',
 ]);
 
 /**
@@ -57,6 +60,7 @@ const WORKTREE_ONLY_SUBCOMMANDS = new Set([
   'switch',
   'commit',
   'add',
+  'rm',
   'reset',
   'clean',
   'read-tree',
@@ -147,18 +151,43 @@ export function commandHistory(): GitCommandRecord[] {
   return history.slice().reverse();
 }
 
+/**
+ * The managed worktree always lives at `<git-common-dir>/gcp-worktree`, so we
+ * require the segment to sit directly under a `.git` directory. Matching the
+ * name alone would let a real checkout at `C:/work/gcp-worktree/app` pass as the
+ * scratch area and unlock `reset --hard` against it.
+ */
 export function isInsideManagedWorktree(cwd: string): boolean {
   const parts = path.resolve(cwd).split(/[\\/]/);
-  return parts.includes(MANAGED_WORKTREE_DIRNAME);
+  const i = parts.indexOf(MANAGED_WORKTREE_DIRNAME);
+  return i > 0 && parts[i - 1] === '.git';
 }
 
-function firstSubcommand(args: string[]): string | undefined {
-  for (const arg of args) {
-    // Skip global options like -c foo=bar / --no-pager before the subcommand.
-    if (arg.startsWith('-')) continue;
-    return arg;
+/**
+ * Global options that take a separate value. `-c key=value` in particular would
+ * otherwise leave `key=value` looking like the subcommand.
+ */
+const VALUE_TAKING_GLOBALS = new Set(['-c', '-C', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
+
+/**
+ * Options that redirect where git operates. These would defeat the working-tree
+ * restriction entirely — `git -C /elsewhere cherry-pick` run with a cwd inside
+ * the scratch worktree would pass the cwd check and then act somewhere else.
+ * We never use them, and refusing them keeps the guard meaningful.
+ */
+const PATH_REDIRECTING_GLOBALS = /^(-C|--git-dir|--work-tree|--namespace|--exec-path)(=|$)/;
+
+/** Splits argv into the global options and the subcommand that follows them. */
+function splitArgs(args: string[]): { globals: string[]; sub?: string } {
+  const globals: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg.startsWith('-')) return { globals, sub: arg };
+    globals.push(arg);
+    // Skip this option's value so it isn't mistaken for the subcommand.
+    if (VALUE_TAKING_GLOBALS.has(arg)) i++;
   }
-  return undefined;
+  return { globals };
 }
 
 /**
@@ -166,7 +195,20 @@ function firstSubcommand(args: string[]): string | undefined {
  * assert the denials directly rather than by observing side effects.
  */
 export function assertAllowed(args: string[], opts: GitOptions): void {
-  const sub = firstSubcommand(args);
+  const { globals, sub } = splitArgs(args);
+
+  // Only global options — those before the subcommand — can redirect git. After
+  // it the same spellings mean other things (`git commit -C <commit>` reuses a
+  // message), so scope the check rather than banning the characters outright.
+  for (const arg of globals) {
+    if (PATH_REDIRECTING_GLOBALS.test(arg)) {
+      throw new GitPolicyError(
+        `Refusing global option ${arg}: redirecting git to another directory would bypass the ` +
+          `working-tree restriction.`,
+      );
+    }
+  }
+
   if (!sub) throw new GitPolicyError('No git subcommand supplied.');
 
   if (DENIED_SUBCOMMANDS.has(sub)) {
@@ -196,8 +238,12 @@ export function assertAllowed(args: string[], opts: GitOptions): void {
 
   for (const arg of args) {
     if (FORCE_FLAGS.test(arg)) {
-      const cleanForce = sub === 'clean' && (arg === '-f' || arg === '--force');
-      if (!cleanForce) {
+      // `clean` and `rm` genuinely require -f to act on a modified or conflicted
+      // file, and both are confined to the scratch worktree anyway. Every other
+      // use of a force flag is refused.
+      const legitimateForce =
+        (sub === 'clean' || sub === 'rm') && (arg === '-f' || arg === '--force');
+      if (!legitimateForce) {
         throw new GitPolicyError(`Refusing to run git ${sub} with ${arg}.`);
       }
     }
@@ -224,13 +270,27 @@ export function assertAllowed(args: string[], opts: GitOptions): void {
     if (args.includes('-d') || args.includes('--delete')) {
       throw new GitPolicyError('Refusing to delete refs.');
     }
-    const ref = args[args.indexOf('update-ref') + 1];
+
+    // Collect the positional arguments, skipping options and their values, so
+    // an added `-m <reason>` doesn't shift the ref out from under this check.
+    const positional: string[] = [];
+    for (let i = args.indexOf('update-ref') + 1; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '-m') {
+        i++; // skip the reflog message
+        continue;
+      }
+      if (arg.startsWith('-')) continue;
+      positional.push(arg);
+    }
+
+    const [ref, , oldValue] = positional;
     if (!ref || !ref.startsWith('refs/heads/')) {
       throw new GitPolicyError('update-ref is restricted to refs/heads/*.');
     }
     // Requiring the old value makes the update a compare-and-swap: if anything
     // moved the branch since we read it, git refuses rather than clobbering.
-    if (args.length < args.indexOf('update-ref') + 4) {
+    if (!oldValue) {
       throw new GitPolicyError('update-ref must supply the expected old value.');
     }
   }

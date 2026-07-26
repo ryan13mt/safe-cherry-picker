@@ -123,7 +123,75 @@ pick for real using `git merge-tree --write-tree`, entirely in the object databa
 - A test asserts the fixture repo is byte-identical before and after.
 
 You get **✓ simulated clean** or **⚠ conflicts in N files** with the paths, before you
-commit to anything.
+commit to anything. Promotions get the same treatment: the Promote and Back-merge
+buttons predict their conflicts the same way.
+
+### Conflict viewer
+
+When an operation does stop on a conflict, you don't have to leave the app to understand
+it. For each conflicted file the viewer shows:
+
+- **What kind of conflict it is** — both sides changed it, both added it independently,
+  or one side deleted it. (Git can't tell "deleted here" from "never existed here", so
+  the wording covers both — the second is what you get when a pick skips the commit that
+  created the file.)
+- **The incoming commit's diff**, so you can see what it was actually trying to do.
+- **Each conflicting region, with both sides named by branch** rather than "ours" and
+  "theirs" — `stable` versus `feature/PAY-1100-fraud-checks · 314adfd`. The base is shown
+  too when your `merge.conflictStyle` is diff3.
+- **Which commit introduced each line**, in a blame gutter beside it, hoverable for the
+  author, date and subject. This is often the whole answer: if the incoming lines came
+  from a commit you *didn't* select, that's why it conflicts.
+- **Adjustable context** — ±3 / ±10 / ±25 / whole file. The merged file is already in the
+  payload, so widening is instant and needs no round trip.
+- **Line numbers from each side's own file**, not the merged one with markers in it.
+- **Take ours / Take theirs** per file, which runs `git checkout --ours/--theirs` and
+  stages the result. For delete conflicts it offers the deletion-aware choice instead.
+
+Binary files say so plainly rather than pretending to be mergeable, and very large files
+are skipped rather than pushed through the browser.
+
+You can still resolve by hand in the worktree — the path is shown — and the app will not
+let you continue while conflict markers remain in a file, because committing
+`<<<<<<< HEAD` into a release branch is worse than an error message.
+
+A cherry-pick can also stop because a commit is **empty** — its changes are already on
+the target. That's reported as its own state, with a **Skip this commit** action, rather
+than being mislabelled a conflict with zero conflicted files.
+
+### How squashing works
+
+Squash mode picks each commit **normally** and then collapses them with
+`reset --soft` + a single commit.
+
+The obvious implementation — `git cherry-pick -n A B C` followed by one commit — does not
+work. Git requires a clean tree before each pick in a sequence, and `-n` guarantees the
+tree is dirty from the second pick onwards, so it fails with *"your local changes would be
+overwritten by cherry-pick"*. It only fails for some shapes (one commit adding a file that
+a later one edits is enough; several edits to a pre-existing file can slip through), which
+makes it a particularly bad thing to rely on.
+
+Picking normally also means conflicts resume through the ordinary `--continue` path, and
+the collapse happens once the whole sequence has landed. The squash commit's message lists
+every source SHA, so traceability survives even though the individual `-x` trailers don't.
+
+### Interrupted operations
+
+Git's idea of "a cherry-pick is in progress" is broader than `CHERRY_PICK_HEAD`: a
+multi-commit pick also keeps a `sequencer/` directory holding the remaining todo list, and
+that can outlive `CHERRY_PICK_HEAD` — for example when a later commit in the sequence
+turns out empty. While it exists, git refuses every new pick with *"cherry-pick is already
+in progress"*.
+
+The app detects that state, so an interrupted pick stays visible and abortable instead of
+silently blocking everything. Abort clears the sequencer with `cherry-pick --quit` when
+`--abort` can't (which is the case once `CHERRY_PICK_HEAD` has gone), and a stale
+sequencer left by a crash is cleared before the next operation starts.
+
+If git has an operation in progress that the app has no record of — a crash between
+writes, or a pick you drove by hand in the worktree — it's reported as **orphaned**: you
+get an Abort button but not Continue or Skip, because there's no way to know which branch
+it was meant to advance.
 
 ## Safety model
 
@@ -140,11 +208,19 @@ Enforced in `server/git.ts`, not merely in the UI:
 - `push`, `pull`, `fetch`, `rebase`, `filter-branch`, `reflog`, `gc` and friends are
   rejected outright. **Nothing is ever pushed.**
 - Mutating subcommands require an explicit `write: true` from the caller.
-- Anything that touches a working tree (`cherry-pick`, `merge`, `commit`, `add`,
-  `checkout`, `reset`, `clean`) is refused unless its cwd is inside the managed worktree.
+- Anything that touches a working tree (`cherry-pick`, `merge`, `commit`, `add`, `rm`,
+  `checkout`, `reset`, `clean`) is refused unless its cwd is inside the managed worktree —
+  identified by position (`…/.git/gcp-worktree`), not just by folder name.
+- Global options that redirect git elsewhere (`-C`, `--git-dir`, `--work-tree`) are
+  refused, since they would otherwise sidestep that check entirely.
 - `reset`/`clean` are double-gated behind a `scratch: true` flag on top of that.
-- `--force` in any form is refused; `update-ref` is restricted to `refs/heads/*` and must
+- `--force` is refused except for `clean -f` and `rm -f`, which genuinely need it and are
+  confined to the scratch worktree; `update-ref` is restricted to `refs/heads/*` and must
   supply the expected old value.
+- Operations are serialised per repo, so a double-clicked button can't run two
+  cherry-picks through the same worktree at once.
+- Every branch advance writes a descriptive reflog entry (`git-cherry-picker: merge
+  develop into stable`), so `git reflog stable` shows exactly what the app did and when.
 - The server binds `127.0.0.1` only, and repo paths must resolve inside `scanRoot`.
 - Every write endpoint previews the literal git commands before running.
 
@@ -160,12 +236,29 @@ so you can resolve them in your editor, then Continue or Abort.
 npm test
 ```
 
-`scripts/make-fixture.mjs` builds a throwaway repo containing every case: a merged
-branch, plain cherry-picks, a `-x` pick, a squash merge, a hotfix stranded on prod, two
-tickets interleaved through the same file, a lowercase ticket prefix, an id mentioned
-mid-subject, and a branch with no id in its name. The suite covers the classifier,
-grouping, the dry-run engine, the write ops (including a real conflict, resolve and
-abort), the git policy layer, and server-rendered views.
+114 tests across two styles:
+
+**A shared fixture** (`scripts/make-fixture.mjs`) for anything that needs a realistic
+history: a merged branch, plain cherry-picks, a `-x` pick, a squash merge, a hotfix
+stranded on prod, interleaved tickets, a lowercase prefix, an id mentioned mid-subject,
+and a branch with no id in its name. This drives the classifier, grouping, base
+selection, pipeline and view tests.
+
+**A repo builder** (`test/repo-builder.ts`) for edge cases, where each test constructs
+the smallest history that produces the situation. Covered:
+
+| Area | Cases |
+|---|---|
+| Ordering | reversed selection; commits whose timestamps contradict their topology |
+| Empty / unpickable | already-applied commit → pause + skip; merge commits skipped; all-merge selection; unknown sha; root commit |
+| Mid-sequence | partial apply then pause with done/remaining; abort restores; refusing to continue with markers left in |
+| Conflict kinds | both-modified, both-added, binary, modify/delete, delete/modify |
+| Resolution | take ours, take theirs, accept a deletion, reject a non-conflicted path |
+| Merges | already up to date, merge into itself, forced merge commit, fast-forward, unrelated histories, missing branch, checked-out target |
+| Prediction | conflict and clean merges predicted before running; dry runs leave no trace |
+| Unusual input | non-ascii paths, subjects and content; branch names with slashes and dots |
+| Concurrency | two simultaneous operations serialised; compare-and-swap refuses when the branch moved underneath |
+| Isolation | checkout, current branch and uncommitted work unchanged across conflict and abort |
 
 ## Layout
 
@@ -177,11 +270,14 @@ server/
     pipeline.ts           ahead/behind per chain leg, both directions
     release.ts            the four-strategy classifier
     grouping.ts           Jira extraction + partial/likely/released rollup
-    dryrun.ts             merge-tree conflict simulation
+    dryrun.ts             merge-tree conflict simulation, for picks and merges
+    conflicts.ts          index stages, hunk parsing, per-file resolution
     worktree.ts           managed worktree lifecycle
-    ops.ts                cherry-pick / merge / continue / abort
+    ops.ts                cherry-pick / merge / continue / skip / abort
 web/src/                  React client
-scripts/make-fixture.mjs  the test repo generator
+scripts/make-fixture.mjs  fixture for the classifier tests
+scripts/make-sandbox.mjs  realistic demo repo (npm run sandbox)
+test/repo-builder.ts      builder for edge-case repos
 ```
 
 ## Not included

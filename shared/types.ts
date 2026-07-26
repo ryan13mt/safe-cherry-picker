@@ -131,10 +131,88 @@ export interface OpStatus {
   target?: string;
   worktreePath?: string;
   conflicts: string[];
+  /**
+   * The paused commit turned out to be a no-op — its changes are already on the
+   * target. It has to be skipped rather than resolved.
+   */
+  empty?: boolean;
+  /**
+   * Git has an operation in progress that the app has no record of. It can be
+   * cleared, but not meaningfully continued — we don't know which branch it was
+   * meant to advance.
+   */
+  orphaned?: boolean;
   /** Commits already applied in this operation. */
   done?: string[];
   remaining?: string[];
   message?: string;
+}
+
+export type ConflictKind = 'both-modified' | 'both-added' | 'deleted-by-us' | 'deleted-by-them';
+
+export interface BlameLine {
+  sha: string;
+  short: string;
+  author: string;
+  /** ISO date of the authoring commit. */
+  date: string;
+  summary: string;
+}
+
+export interface ConflictHunk {
+  startLine: number;
+  endLine: number;
+  contextBefore: string[];
+  /** What the target branch already had. */
+  ours: string[];
+  /** Present only when the user's merge.conflictStyle includes the base (diff3). */
+  base?: string[];
+  /** What the incoming commit wants. */
+  theirs: string[];
+  contextAfter: string[];
+  /** 1-based position of this block within each side's own file, when locatable. */
+  oursStart?: number;
+  theirsStart?: number;
+  /** Per-line origin, aligned index-for-index with `ours` / `theirs`. */
+  oursBlame?: BlameLine[];
+  theirsBlame?: BlameLine[];
+}
+
+/** Where one side of a conflict comes from, for labelling the columns. */
+export interface ConflictSide {
+  /** Branch name, when one is known. */
+  branch?: string;
+  commit?: { sha: string; short: string; subject: string };
+  /** Ready-to-display label, e.g. "stable" or "feature/PAY-1100 · a1b2c3d". */
+  label: string;
+}
+
+export interface ConflictDetail {
+  path: string;
+  kind: ConflictKind;
+  binary: boolean;
+  truncated: boolean;
+  base?: string;
+  ours?: string;
+  theirs?: string;
+  /** Working-tree content, including git's conflict markers. */
+  merged?: string;
+  hunks: ConflictHunk[];
+  /** The diff the incoming commit wanted to make to this file. */
+  incomingDiff?: string;
+}
+
+export interface ConflictReport {
+  inProgress: boolean;
+  kind?: OpKind;
+  target?: string;
+  worktreePath?: string;
+  /** The commit currently being applied, when one is identifiable. */
+  incoming?: { sha: string; short: string; subject: string };
+  /** Provenance of each column, so the UI can name them rather than say "ours". */
+  ours?: ConflictSide;
+  theirs?: ConflictSide;
+  files: ConflictDetail[];
 }
 
 export interface OpResult {

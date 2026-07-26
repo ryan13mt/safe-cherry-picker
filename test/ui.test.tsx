@@ -100,6 +100,145 @@ describe('pipeline view', () => {
   });
 });
 
+describe('conflict viewer', () => {
+  it('shows the three versions, the incoming diff and a way to take each side', async () => {
+    const { ConflictViewer } = await import('../web/src/components/ConflictViewer.tsx');
+    const html = renderToStaticMarkup(
+      <ConflictViewer
+        busy={false}
+        onResolve={() => {}}
+        report={{
+          inProgress: true,
+          kind: 'cherry-pick',
+          target: 'stable',
+          worktreePath: 'C:/repo/.git/gcp-worktree',
+          incoming: { sha: 'abc', short: 'abc1234', subject: '[JIRA-812] tighten parser' },
+          ours: { branch: 'stable', label: 'stable' },
+          theirs: {
+            branch: 'feature/PAY-1100-fraud-checks',
+            commit: { sha: 'abc', short: 'abc1234', subject: '[JIRA-812] tighten parser' },
+            label: 'feature/PAY-1100-fraud-checks · abc1234',
+          },
+          files: [
+            {
+              path: 'src/parser.ts',
+              kind: 'both-modified',
+              binary: false,
+              truncated: false,
+              base: 'original\n',
+              ours: 'stable side\n',
+              theirs: 'incoming side\n',
+              merged: '<<<<<<< HEAD\nstable side\n=======\nincoming side\n>>>>>>> abc\n',
+              hunks: [
+                {
+                  startLine: 1,
+                  endLine: 5,
+                  contextBefore: [],
+                  ours: ['stable side'],
+                  theirs: ['incoming side'],
+                  contextAfter: [],
+                  oursStart: 12,
+                  theirsStart: 34,
+                  oursBlame: [
+                    {
+                      sha: 'dddddddd',
+                      short: 'ddddddd',
+                      author: 'Dana',
+                      date: '2026-01-02T00:00:00.000Z',
+                      summary: 'stable hotfix',
+                    },
+                  ],
+                  theirsBlame: [
+                    {
+                      sha: 'eeeeeeee',
+                      short: 'eeeeeee',
+                      author: 'Eli',
+                      date: '2026-02-03T00:00:00.000Z',
+                      summary: 'tighten parser',
+                    },
+                  ],
+                },
+              ],
+              incomingDiff: '@@ -1 +1 @@\n-original\n+incoming side\n',
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(html).toContain('src/parser.ts');
+    expect(html).toContain('[JIRA-812] tighten parser');
+    expect(html).toContain('stable side');
+    expect(html).toContain('incoming side');
+    expect(html).toContain('Take ours');
+    expect(html).toContain('Take theirs');
+    expect(html).toContain('both sides changed this file');
+
+    // Both columns are named by branch rather than just "ours"/"theirs".
+    expect(html).toContain('feature/PAY-1100-fraud-checks');
+    expect(html).toContain('>stable<');
+
+    // Per-line origin, with the full commit detail available on hover.
+    expect(html).toContain('ddddddd');
+    expect(html).toContain('eeeeeee');
+    expect(html).toContain('stable hotfix');
+    expect(html).toContain('Dana');
+
+    // Line numbers come from each side's own file.
+    expect(html).toContain('>12<');
+    expect(html).toContain('>34<');
+
+    // And a control for widening context.
+    expect(html).toContain('±10');
+  });
+
+  it('offers deletion-aware wording for a modify/delete conflict', async () => {
+    const { ConflictViewer } = await import('../web/src/components/ConflictViewer.tsx');
+    const html = renderToStaticMarkup(
+      <ConflictViewer
+        busy={false}
+        onResolve={() => {}}
+        report={{
+          inProgress: true,
+          kind: 'cherry-pick',
+          target: 'stable',
+          files: [
+            {
+              path: 'gone.ts',
+              kind: 'deleted-by-them',
+              binary: false,
+              truncated: false,
+              ours: 'kept\n',
+              hunks: [],
+            },
+          ],
+        }}
+      />,
+    );
+    // "Take theirs" would be meaningless here — the point is accepting a delete.
+    expect(html).toContain('Accept deletion');
+    expect(html).not.toContain('Take theirs');
+  });
+
+  it('says plainly that a binary file cannot be merged line by line', async () => {
+    const { ConflictViewer } = await import('../web/src/components/ConflictViewer.tsx');
+    const html = renderToStaticMarkup(
+      <ConflictViewer
+        busy={false}
+        onResolve={() => {}}
+        report={{
+          inProgress: true,
+          kind: 'merge',
+          target: 'prod',
+          files: [{ path: 'logo.png', kind: 'both-modified', binary: true, truncated: false, hunks: [] }],
+        }}
+      />,
+    );
+    expect(html).toContain('binary');
+    expect(html).toContain('nothing to merge line by line');
+  });
+});
+
 describe('operation dialog', () => {
   it('shows the literal commands and the conflict detail before anything runs', () => {
     const html = renderToStaticMarkup(

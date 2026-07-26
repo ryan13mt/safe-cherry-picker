@@ -129,6 +129,24 @@ describe('ticket grouping', () => {
   });
 });
 
+describe('unknown branches', () => {
+  it('explains that the branch is missing instead of leaking a git error', async () => {
+    // Reachable by switching repos in the UI: the previously selected branch
+    // may not exist in the repo you just switched to.
+    await expect(buildMatrix('test', fx.repo, 'main')).rejects.toThrow(
+      /Branch 'main' does not exist/,
+    );
+    // And it says what is available, so the message is actionable.
+    await expect(buildMatrix('test', fx.repo, 'main')).rejects.toThrow(/Available: .*develop/);
+  });
+
+  it('rejects a branch name that could be read as an option', async () => {
+    await expect(buildMatrix('test', fx.repo, '--upload-pack=evil')).rejects.toThrow(
+      /does not exist/,
+    );
+  });
+});
+
 describe('branch base selection', () => {
   it('scopes a branch to its own commits when develop has moved on and the branch was merged back', async () => {
     // spike/tidy-up was cut from develop *after* the feature branch was merged

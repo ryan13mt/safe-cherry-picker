@@ -54,6 +54,44 @@ export function parseMergeTreeOutput(stdout: string): { tree: string; conflicts:
   return { tree, conflicts: [...new Set(conflicts)] };
 }
 
+/**
+ * The merge equivalent of the cherry-pick simulation. `merge-tree` works out
+ * the merge base itself here, so this is a single call with no chaining.
+ */
+export async function simulateMerge(input: {
+  repoPath: string;
+  target: string;
+  from: string;
+}): Promise<SimulationResult> {
+  const { repoPath, target, from } = input;
+  const result: SimulationResult = {
+    target,
+    clean: true,
+    applied: [],
+    conflicts: [],
+    skippedMerges: [],
+  };
+
+  const res = await git(['merge-tree', '--write-tree', '-z', '--name-only', target, from], {
+    cwd: repoPath,
+    allowFail: true,
+  });
+
+  if (res.code !== 0 && res.code !== 1) {
+    result.clean = false;
+    // Unrelated histories are the common case here, and git's own wording is
+    // clearer than anything we'd invent.
+    result.error = (res.stderr || res.stdout).trim() || `merge-tree exited ${res.code}`;
+    return result;
+  }
+
+  if (res.code === 1) {
+    result.clean = false;
+    result.conflicts = parseMergeTreeOutput(res.stdout).conflicts;
+  }
+  return result;
+}
+
 export interface SimulateInput {
   repoPath: string;
   target: string;

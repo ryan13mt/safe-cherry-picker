@@ -14,6 +14,17 @@ export async function buildMatrix(
 ): Promise<ReleaseMatrix> {
   const cfg = loadConfig();
   const existing = new Set(await localBranches(repoPath));
+
+  // Check before touching rev-parse: otherwise an unknown branch surfaces as
+  // git's "ambiguous argument" wall of text, which reads like a bug in the app
+  // rather than a branch that simply isn't here.
+  if (!existing.has(branch)) {
+    throw new Error(
+      `Branch '${branch}' does not exist in this repository. ` +
+        `Available: ${[...existing].sort().join(', ') || '(none)'}.`,
+    );
+  }
+
   const targets = (targetsOverride ?? cfg.chain).filter(
     (t) => existing.has(t) && t !== branch,
   );

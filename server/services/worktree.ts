@@ -87,7 +87,15 @@ export async function prepareWorktree(repoPath: string, ref: string): Promise<st
     await git(['worktree', 'add', '--detach', wt, ref], { cwd: repoPath, write: true });
   }
 
-  // Clear anything left behind by a previous run before we start.
+  // Clear anything left behind by a previous run before we start. `--quit`
+  // discards sequencer state without touching HEAD, and is the only thing that
+  // clears a half-finished pick that no longer has CHERRY_PICK_HEAD. Callers
+  // reach here only after preflight has refused genuinely in-flight work, so
+  // anything still here is debris from a crash.
+  if (await hasSequencerState(wt)) {
+    await git(['cherry-pick', '--quit'], { cwd: wt, write: true, allowFail: true });
+  }
+  await git(['merge', '--abort'], { cwd: wt, write: true, allowFail: true });
   await git(['checkout', '--detach', ref], { cwd: wt, write: true, allowFail: true });
   await git(['reset', '--hard', ref], { cwd: wt, write: true, scratch: true });
   await git(['clean', '-fd'], { cwd: wt, write: true, scratch: true });
@@ -95,22 +103,63 @@ export async function prepareWorktree(repoPath: string, ref: string): Promise<st
   return wt;
 }
 
-/** True when a cherry-pick or merge is mid-flight in the managed worktree. */
+/**
+ * True when a cherry-pick or merge is mid-flight in the managed worktree.
+ *
+ * CHERRY_PICK_HEAD alone is not enough. For a multi-commit pick git also keeps a
+ * `sequencer/` directory holding the remaining todo list, and that can outlive
+ * CHERRY_PICK_HEAD — for instance when a later commit in the sequence turns out
+ * empty. In that state git refuses any new cherry-pick ("cherry-pick is already
+ * in progress") while we would have happily reported everything clear and tried
+ * to start one.
+ */
 export async function inFlightOperation(
   worktreePath: string,
 ): Promise<'cherry-pick' | 'merge' | null> {
   if (!existsSync(worktreePath)) return null;
+
   const pick = await git(['rev-parse', '--quiet', '--verify', 'CHERRY_PICK_HEAD'], {
     cwd: worktreePath,
     allowFail: true,
   });
   if (pick.code === 0 && pick.stdout.trim()) return 'cherry-pick';
+
   const merge = await git(['rev-parse', '--quiet', '--verify', 'MERGE_HEAD'], {
     cwd: worktreePath,
     allowFail: true,
   });
   if (merge.code === 0 && merge.stdout.trim()) return 'merge';
+
+  if (await hasSequencerState(worktreePath)) return 'cherry-pick';
   return null;
+}
+
+/**
+ * True while git is stopped *on a specific commit*. Distinguishes a pick paused
+ * mid-commit from one that merely has a leftover sequencer, which matters
+ * because only the former can be diagnosed as empty.
+ */
+export async function hasCherryPickHead(worktreePath: string): Promise<boolean> {
+  if (!existsSync(worktreePath)) return false;
+  const res = await git(['rev-parse', '--quiet', '--verify', 'CHERRY_PICK_HEAD'], {
+    cwd: worktreePath,
+    allowFail: true,
+  });
+  return res.code === 0 && res.stdout.trim().length > 0;
+}
+
+/** Leftover sequencer state, which makes git consider a pick still running. */
+export async function hasSequencerState(worktreePath: string): Promise<boolean> {
+  if (!existsSync(worktreePath)) return false;
+  // `--git-path` resolves per-worktree paths correctly, which a hand-built
+  // `.git/worktrees/<name>/sequencer` would not.
+  const res = await git(['rev-parse', '--git-path', 'sequencer'], {
+    cwd: worktreePath,
+    allowFail: true,
+  });
+  if (res.code !== 0) return false;
+  const dir = path.resolve(worktreePath, res.stdout.trim());
+  return existsSync(path.join(dir, 'todo')) || existsSync(dir);
 }
 
 export async function conflictedFiles(worktreePath: string): Promise<string[]> {

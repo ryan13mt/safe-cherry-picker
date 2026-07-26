@@ -13,6 +13,9 @@ import {
   operationStatus,
   continueOperation,
   abortOperation,
+  skipOperation,
+  conflictReport,
+  resolveConflict,
   previewCommands,
 } from './services/ops.ts';
 
@@ -115,6 +118,8 @@ const cherryPickSchema = z.object({
   commits: z.array(shaSchema).min(1).max(500),
   style: z.enum(['individual', 'squash']).default('individual'),
   message: z.string().max(5000).optional(),
+  /** Purely for labelling a paused conflict; never passed to git as a revision. */
+  sourceBranch: branchSchema.optional(),
   dryRun: z.boolean().default(false),
 });
 
@@ -128,6 +133,7 @@ router.post('/repos/:id/cherry-pick', async (req, res) => {
       shas: body.commits,
       style: body.style,
       message: body.message,
+      sourceBranch: body.sourceBranch,
       dryRun: body.dryRun,
     });
     res.json({ ...result, preview: previewCommands(result.commands) });
@@ -185,6 +191,50 @@ router.post('/repos/:id/op/abort', async (req, res) => {
   try {
     const repo = await resolveRepo(req.params.id);
     const result = await abortOperation(repo.path);
+    res.json({ ...result, preview: previewCommands(result.commands) });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.post('/repos/:id/op/skip', async (req, res) => {
+  try {
+    const repo = await resolveRepo(req.params.id);
+    const result = await skipOperation(repo.path);
+    res.json({ ...result, preview: previewCommands(result.commands) });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.get('/repos/:id/op/conflicts', async (req, res) => {
+  try {
+    const repo = await resolveRepo(req.params.id);
+    res.json(await conflictReport(repo.path));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+const resolveSchema = z.object({
+  // Reject absolute paths and traversal: this becomes a pathspec inside the
+  // worktree, and nothing outside it is ever a legitimate target.
+  path: z
+    .string()
+    .min(1)
+    .max(4096)
+    .refine(
+      (p) => !p.startsWith('-') && !p.startsWith('/') && !/^[A-Za-z]:/.test(p) && !p.split(/[\\/]/).includes('..'),
+      { message: 'Invalid file path' },
+    ),
+  choice: z.enum(['ours', 'theirs']),
+});
+
+router.post('/repos/:id/op/resolve', async (req, res) => {
+  try {
+    const body = resolveSchema.parse(req.body);
+    const repo = await resolveRepo(req.params.id);
+    const result = await resolveConflict(repo.path, body.path, body.choice);
     res.json({ ...result, preview: previewCommands(result.commands) });
   } catch (err) {
     fail(res, err);

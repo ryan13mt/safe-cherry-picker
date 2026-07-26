@@ -6,10 +6,12 @@ import type {
   RepoSummary,
   SimulationResult,
   OpStatus,
+  ConflictReport,
 } from '../../shared/types.ts';
 import { PipelineView } from './views/PipelineView.tsx';
 import { ReleaseMatrixView } from './views/ReleaseMatrix.tsx';
 import { OpDialog, type OpPlan } from './components/OpDialog.tsx';
+import { ConflictViewer } from './components/ConflictViewer.tsx';
 
 type Tab = 'pipeline' | 'matrix';
 
@@ -28,6 +30,7 @@ export function App() {
   const [branch, setBranch] = useState<string>('');
 
   const [opStatus, setOpStatus] = useState<OpStatus | null>(null);
+  const [conflicts, setConflicts] = useState<ConflictReport | null>(null);
   const [plan, setPlan] = useState<{ plan: OpPlan; op: PendingOp } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +58,7 @@ export function App() {
       setBranchInfo(info);
       setPipeline(pipe);
       setOpStatus(status);
+      setConflicts(status.inProgress ? await api.conflicts(repoId) : null);
 
       const preferred =
         branch && info.branches.includes(branch)
@@ -71,7 +75,13 @@ export function App() {
   }, [refreshRepo]);
 
   useEffect(() => {
-    if (!repoId || !branch) {
+    // Only ask once the branch is known to belong to the *current* repo.
+    // Switching repos leaves the previous repo's branch in state for a render,
+    // and asking the new repo about a branch it doesn't have fails confusingly.
+    const branchBelongsToRepo =
+      branchInfo?.id === repoId && Boolean(branch) && branchInfo.branches.includes(branch);
+
+    if (!branchBelongsToRepo) {
       setMatrix(null);
       return;
     }
@@ -83,7 +93,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [repoId, branch, opStatus?.inProgress]);
+  }, [repoId, branch, branchInfo, opStatus?.inProgress]);
 
   const simulate = useCallback(
     (target: string, commits: string[]): Promise<SimulationResult> =>
@@ -149,6 +159,7 @@ export function App() {
               target: plan.op.target,
               commits: plan.op.commits,
               style,
+              sourceBranch: branch,
             })
           : await api.merge(repoId, { from: plan.op.from, into: plan.op.into });
 
@@ -162,14 +173,32 @@ export function App() {
     }
   };
 
-  const resolveOp = async (action: 'continue' | 'abort') => {
+  const resolveOp = async (action: 'continue' | 'abort' | 'skip') => {
     setBusy(true);
     setError(null);
     try {
-      const result =
-        action === 'continue' ? await api.opContinue(repoId) : await api.opAbort(repoId);
+      const call =
+        action === 'continue' ? api.opContinue : action === 'abort' ? api.opAbort : api.opSkip;
+      const result = await call(repoId);
       setToast(result.message ?? 'Done.');
+      // A failed continue is not an error state — it usually means something is
+      // still unresolved, and the message says what.
+      if (!result.ok && result.message) setError(result.message);
       await refreshRepo();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const takeSide = async (file: string, choice: 'ours' | 'theirs') => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.resolve(repoId, file, choice);
+      setConflicts(await api.conflicts(repoId));
+      setOpStatus(await api.opStatus(repoId));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -227,19 +256,18 @@ export function App() {
         <div className="banner banner-warn">
           <div>
             <strong>
-              {opStatus.kind} into {opStatus.target} is paused on a conflict
+              {opStatus.kind} into {opStatus.target} is paused
+              {opStatus.empty ? ' on an empty commit' : ' on a conflict'}
             </strong>
             <p>
-              Resolve these files in <code>{opStatus.worktreePath}</code>, then continue. Your own
-              checkout is untouched and {opStatus.target} has not moved.
+              {opStatus.empty
+                ? 'This commit changes nothing here — its work is already on the target. Skip it to carry on.'
+                : 'Resolve below, or edit the files directly in the worktree.'}{' '}
+              Your own checkout is untouched and {opStatus.target} has not moved.
             </p>
-            <ul className="file-list">
-              {opStatus.conflicts.map((f) => (
-                <li key={f}>
-                  <code>{f}</code>
-                </li>
-              ))}
-            </ul>
+            <p className="muted">
+              worktree: <code>{opStatus.worktreePath}</code>
+            </p>
             {opStatus.remaining && opStatus.remaining.length > 0 && (
               <p className="muted">
                 {opStatus.done?.length ?? 0} applied, {opStatus.remaining.length} still to go.
@@ -247,14 +275,33 @@ export function App() {
             )}
           </div>
           <div className="banner-actions">
-            <button className="primary" disabled={busy} onClick={() => resolveOp('continue')}>
-              Continue
-            </button>
-            <button className="ghost" disabled={busy} onClick={() => resolveOp('abort')}>
+            {!opStatus.empty && !opStatus.orphaned && (
+              <button className="primary" disabled={busy} onClick={() => resolveOp('continue')}>
+                Continue
+              </button>
+            )}
+            {opStatus.kind === 'cherry-pick' && !opStatus.orphaned && (
+              <button
+                className={opStatus.empty ? 'primary' : 'ghost'}
+                disabled={busy}
+                onClick={() => resolveOp('skip')}
+              >
+                Skip this commit
+              </button>
+            )}
+            <button
+              className={opStatus.orphaned ? 'primary' : 'ghost'}
+              disabled={busy}
+              onClick={() => resolveOp('abort')}
+            >
               Abort
             </button>
           </div>
         </div>
+      )}
+
+      {conflicts?.inProgress && (
+        <ConflictViewer report={conflicts} busy={busy} onResolve={takeSide} />
       )}
 
       {error && (

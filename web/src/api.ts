@@ -5,6 +5,7 @@ import type {
   SimulationResult,
   OpResult,
   OpStatus,
+  ConflictReport,
   GitCommandRecord,
 } from '../../shared/types.ts';
 
@@ -55,11 +56,21 @@ export const api = {
     post<SimulationResult>(`/repos/${id}/simulate`, { target, commits }),
   cherryPick: (
     id: string,
-    body: { target: string; commits: string[]; style: 'individual' | 'squash'; dryRun?: boolean },
+    body: {
+      target: string;
+      commits: string[];
+      style: 'individual' | 'squash';
+      sourceBranch?: string;
+      dryRun?: boolean;
+    },
   ) => post<OpResponse>(`/repos/${id}/cherry-pick`, body),
   merge: (id: string, body: { from: string; into: string; noFf?: boolean; dryRun?: boolean }) =>
     post<OpResponse>(`/repos/${id}/merge`, body),
   opStatus: (id: string) => request<OpStatus>(`/repos/${id}/op/status`),
   opContinue: (id: string) => post<OpResponse>(`/repos/${id}/op/continue`, {}),
   opAbort: (id: string) => post<OpResponse>(`/repos/${id}/op/abort`, {}),
+  opSkip: (id: string) => post<OpResponse>(`/repos/${id}/op/skip`, {}),
+  conflicts: (id: string) => request<ConflictReport>(`/repos/${id}/op/conflicts`),
+  resolve: (id: string, path: string, choice: 'ours' | 'theirs') =>
+    post<OpResponse>(`/repos/${id}/op/resolve`, { path, choice }),
 };
