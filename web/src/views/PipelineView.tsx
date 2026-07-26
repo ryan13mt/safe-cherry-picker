@@ -24,13 +24,17 @@ function CommitList({ commits }: { commits: CommitInfo[] }) {
 
 export function PipelineView({
   report,
+  blocked,
   onPromote,
   onBackMerge,
 }: {
   report: PipelineReport;
+  /** Uncommitted changes present: drift is still shown, actions are not offered. */
+  blocked: boolean;
   onPromote: (from: string, into: string) => void;
   onBackMerge: (from: string, into: string) => void;
 }) {
+  const blockedTitle = blocked ? 'Blocked: the repository has uncommitted changes' : undefined;
   const [open, setOpen] = useState<string | null>(null);
 
   if (report.chain.length < 2) {
@@ -67,7 +71,8 @@ export function PipelineView({
                 </button>
                 <button
                   className="primary small"
-                  disabled={leg.ahead.length === 0}
+                  disabled={leg.ahead.length === 0 || blocked}
+                  title={blockedTitle}
                   onClick={() => onPromote(leg.upstream, leg.downstream)}
                 >
                   Promote →
@@ -86,7 +91,8 @@ export function PipelineView({
                 </button>
                 <button
                   className="ghost small"
-                  disabled={leg.behind.length === 0}
+                  disabled={leg.behind.length === 0 || blocked}
+                  title={blockedTitle}
                   onClick={() => onBackMerge(leg.downstream, leg.upstream)}
                 >
                   ← Back-merge

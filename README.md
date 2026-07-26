@@ -52,6 +52,27 @@ The script prints a walkthrough of what to look at on each branch. Highlights:
 
 Delete it with `rm -rf ../gcp-sandbox` when you're done.
 
+## Choosing the folder to scan
+
+**Change folder…** in the header opens a folder picker: navigate directories, jump to Home,
+the current root, or any drive, or paste a path. Folders that are git repositories are
+badged, and the footer says how many are directly inside, so you can tell whether you've
+landed somewhere useful before committing to it.
+
+The choice is saved to `.gcprc.local.json` (gitignored) and takes effect immediately — no
+restart. The header always shows which folder is being scanned.
+
+Two notes on how this works:
+
+- A browser's own directory picker is no use here. For security it returns an opaque
+  handle rather than a path, and the server needs a real path to run git in. So the server
+  lists directories and the client navigates them. That means the app can enumerate folder
+  names on this machine — acceptable for a loopback-only tool that already reads your
+  repositories, but it is part of why that 127.0.0.1 binding matters.
+- Scans stop after 6000 directories. Without a budget, choosing something like `C:\` would
+  walk a large part of the filesystem and hang the request. When the cap is hit the header
+  says so, rather than quietly showing too few repositories.
+
 ## Configuration
 
 `.gcprc.json` at the project root (`.gcprc.local.json` overrides it and is gitignored):
@@ -125,6 +146,118 @@ pick for real using `git merge-tree --write-tree`, entirely in the object databa
 You get **✓ simulated clean** or **⚠ conflicts in N files** with the paths, before you
 commit to anything. Promotions get the same treatment: the Promote and Back-merge
 buttons predict their conflicts the same way.
+
+### Ticket dependencies
+
+Tickets on a branch are rarely independent, and the matrix says which ones are standing
+on each other's work — before you try a pick and find out the hard way. Two signals, both
+computed from real diff numbers:
+
+| Shown | Meaning |
+|---|---|
+| **Requires X** (hard) | X *added* a file this ticket edits. Picking without X cannot work — the file wouldn't exist. |
+| **Overlaps with X** (soft) | X wrote the majority of the changed lines in a file this ticket also touches (≥50%, at least 10 lines). Usually conflicts, and always means the two were developed together. |
+
+Only an *earlier* change counts, so dependencies point one way. Expanding a ticket lists
+the files and the exact split (`src/fraud.js — 80% of the changed lines are ACME-100's,
+12 vs 2`).
+
+The row-level warning only appears when the dependency **isn't already on the branch
+you're picking into** — that's the difference between "these two were written together"
+and "this pick will break". Selecting a ticket with an unmet dependency shows
+*⚠ needs ACME-100 first* next to the simulation result.
+
+Dependencies on the **Ungrouped** bucket are reported too. Unticketed commits still have
+to be picked, so a ticket that builds on one has a genuine dependency even though there's
+no ticket to name.
+
+### Blocking on uncommitted changes
+
+By default the app refuses to *start* operations while the selected repository has
+uncommitted changes. A banner lists them, actions are disabled, and the server enforces it
+too — the API refuses even if the UI is bypassed.
+
+Worth being clear about what this is and isn't: it is a **policy**, not a safety fix.
+Operations run in a disposable worktree and never touch your working copy — there's a test
+asserting a WIP file survives a conflict and an abort untouched. This setting exists
+because operating on a repo that isn't in a clean state is usually a mistake anyway.
+
+What is deliberately **not** blocked: continue, skip, abort and resolve. Blocking those
+would let a single stray file trap a paused cherry-pick with no way to finish or unwind it.
+Dry runs and all read-only views also stay available.
+
+`blockOnDirty` in the config controls it:
+
+| Value | Behaviour |
+|---|---|
+| `any` (default) | Modifications *or* untracked files block operations |
+| `tracked` | Only modifications block; stray untracked files are tolerated |
+| `off` | No check |
+
+### Who did what
+
+Each ticket in the matrix names the people who wrote its commits, with a count —
+`PAY-1042 · Ana Sousa 3 · Chris Vale 1`. Identities are keyed on email, so the same person
+committing under two spellings of their name counts once.
+
+Each feature branch also shows **who started it** and everyone who has worked on it, in
+both the matrix header and the Cleanup tab (useful before deleting someone else's branch).
+
+A caveat worth stating plainly: **git records nothing about who created a branch.** There
+is no such metadata. "Started by" is the author of the branch's oldest own commit — the
+first committer — which is a proxy, and the only one that survives a clone. Reflogs do
+know who typed `git checkout -b`, but they are local to that machine and would be absent
+or wrong for everyone else, so they aren't used.
+
+Merge commits are excluded from attribution: whoever ran the merge didn't write the work
+it carries. Promotion branches are shared infrastructure and get no owner.
+
+### Command log
+
+A collapsible drawer at the foot of the page lists every git command the app has run —
+argv, exit code and duration, newest first, last 200. This app moves branches on your
+behalf, so being able to see exactly what it executed is the difference between trusting
+it and hoping. "Copy all" gives you the lot as plain text.
+
+### Smaller things
+
+- **Per-ticket churn** — `3 files +11 −0` beside each ticket, from the same diff numbers
+  the dependency analysis computes. Hover for the per-file breakdown.
+- **Filter box** on the matrix, matching ticket ids and commit subjects.
+- **Tab badges** — pipeline drift, outstanding tickets on the current branch, and how many
+  branches are deletable, so you can see what needs attention without clicking.
+- **Add required tickets** — the dependency warning offers a button that ticks the
+  outstanding commits of whatever the selection depends on.
+- **Copy buttons** — the exact git commands, the worktree path when a conflict is paused,
+  and markdown **release notes** for a promotion (tickets, subjects and SHAs, grouped and
+  linked to Jira when a base url is set).
+- **Last repo, branch and tab are remembered** between sessions, and restored only if they
+  still exist.
+
+### Cleanup — which branches have finished
+
+`git branch --merged prod` only understands ancestry, so in a workflow built around
+partial cherry-picks it misses most of the branches that have actually shipped. The
+Cleanup tab runs the release classifier over every local branch instead:
+
+| Verdict | Meaning | Deletable |
+|---|---|---|
+| **merged** | Every commit is an ancestor of a chain branch | Yes, with plain `git branch -d` |
+| **released by pick** | Every commit has shipped, some by cherry-pick | Yes, but needs `-D` — git only checks ancestry |
+| **probably shipped** | Full coverage relies on a squash or subject match | **No** — the app won't delete on a guess |
+| **still outstanding** | Has commits that haven't reached any chain branch | No, with a count of what's left |
+
+Each row shows the branch it's released to, its last commit, and its age, so stale
+branches stand out. Note that "released to develop" still means deleting is safe — the
+commits are reachable — but it is *not* the same as shipped to production; the row says
+which.
+
+Deleting re-runs the classification server-side rather than trusting the page, so a
+cleanup tab left open while someone pushes new work can't delete it. The response returns
+the deleted tip, and the app shows `git branch <name> <sha>` to put it back.
+
+`branch -D` is gated behind a dedicated `forceDelete` opt-in in the git layer, set only
+after the classifier has confirmed the work is released. It unlocks nothing else.
 
 ### Conflict viewer
 

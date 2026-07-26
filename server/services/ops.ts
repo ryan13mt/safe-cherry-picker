@@ -14,6 +14,7 @@ import {
   hasCherryPickHead,
   conflictedFiles,
 } from './worktree.ts';
+import { workingTreeStatus, dirtyBlockReason } from './discover.ts';
 import { simulateCherryPick } from './dryrun.ts';
 import { describeConflicts, resolveFile, type Resolution } from './conflicts.ts';
 import type {
@@ -98,8 +99,20 @@ function withRepoLock<T>(repoPath: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** Blocks operations that would be unsafe before we touch anything. */
+/**
+ * Blocks operations that would be unsafe — or unwanted — before we touch
+ * anything.
+ *
+ * Called only when *starting* work. Continue, skip, abort and resolve
+ * deliberately skip these checks: a stray uncommitted file must never be able to
+ * trap a paused operation with no way to finish or unwind it.
+ */
 async function preflight(repoPath: string, target: string): Promise<void> {
+  // Checked fresh rather than from the cached repo list, so committing or
+  // stashing and retrying works immediately.
+  const blocked = dirtyBlockReason(await workingTreeStatus(repoPath));
+  if (blocked) throw new Error(blocked);
+
   const elsewhere = await branchCheckedOutElsewhere(repoPath, target);
   if (elsewhere) {
     throw new Error(

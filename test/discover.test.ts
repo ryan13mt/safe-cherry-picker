@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setConfig } from '../server/config.ts';
-import { discoverRepos, resolveRepo, clearRepoCache } from '../server/services/discover.ts';
+import { discoverRepos, resolveRepo, clearRepoCache, lastScanStats } from '../server/services/discover.ts';
 
 let root: string;
 
@@ -45,6 +45,16 @@ describe('repo discovery', () => {
     const names = (await discoverRepos(true)).map((r) => r.name);
     expect(names).not.toContain('broken');
     expect(names).not.toContain('plain-folder');
+  });
+
+  it('reports how much it walked, so a huge folder can be flagged', async () => {
+    // Choosing something like C:\ in the folder picker must not hang the
+    // request; the budget is what stops it, and the count is what lets the UI
+    // say the list may be incomplete.
+    await discoverRepos(true);
+    const stats = lastScanStats();
+    expect(stats.visited).toBeGreaterThan(0);
+    expect(stats.truncated).toBe(false);
   });
 
   it('refuses an unknown repo id', async () => {

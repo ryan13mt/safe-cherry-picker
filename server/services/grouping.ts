@@ -1,10 +1,13 @@
 import { loadConfig } from '../config.ts';
+import { contributorsOf } from './commits.ts';
 import type {
   ClassifiedCommit,
   CommitInfo,
   GroupState,
   GroupTargetSummary,
   ReleaseStatus,
+  TicketDependency,
+  TicketFileStat,
   TicketGroup,
 } from '../../shared/types.ts';
 
@@ -114,6 +117,9 @@ export interface GroupInput {
   statuses: Map<string, Record<string, ReleaseStatus>>;
   targets: string[];
   branchName: string;
+  /** Optional: file churn and cross-ticket dependencies, when analysed. */
+  files?: Map<string | null, TicketFileStat[]>;
+  dependencies?: Map<string | null, TicketDependency[]>;
 }
 
 export function groupCommits(input: GroupInput): TicketGroup[] {
@@ -150,6 +156,9 @@ export function groupCommits(input: GroupInput): TicketGroup[] {
       url: ticket && cfg.jiraBaseUrl ? joinUrl(cfg.jiraBaseUrl, ticket) : null,
       commits: groupCommitsList,
       summary,
+      files: input.files?.get(ticket) ?? [],
+      dependsOn: input.dependencies?.get(ticket) ?? [],
+      authors: contributorsOf(groupCommitsList.map((c) => c.commit)),
     };
   });
 

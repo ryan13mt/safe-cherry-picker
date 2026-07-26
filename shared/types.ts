@@ -1,5 +1,43 @@
 /** Types shared between the Express API and the React client. */
 
+export interface DirEntry {
+  name: string;
+  path: string;
+  /** Contains a .git, so choosing the parent would pick this up. */
+  isRepo: boolean;
+}
+
+export interface BrowseResult {
+  path: string;
+  /** Null at a filesystem root. */
+  parent: string | null;
+  entries: DirEntry[];
+  /** Drive roots, on Windows. Empty elsewhere. */
+  drives: string[];
+  /** The directory exists but could not be read (permissions). */
+  unreadable: boolean;
+  /** Useful starting points: home, and the current scan root. */
+  suggestions: { label: string; path: string }[];
+}
+
+export interface ScanInfo {
+  scanRoot: string;
+  repoCount: number;
+  /** The scan hit its directory budget, so some repos may be missing. */
+  truncated: boolean;
+  visited: number;
+}
+
+export interface WorkingTreeStatus {
+  dirty: boolean;
+  /** Tracked files with staged or unstaged modifications. */
+  tracked: string[];
+  untracked: string[];
+  /** The lists were capped; `count` is the real total. */
+  truncated: boolean;
+  count: number;
+}
+
 export interface RepoSummary {
   id: string;
   name: string;
@@ -10,12 +48,30 @@ export interface RepoSummary {
   missingChain: string[];
   currentBranch: string | null;
   dirty: boolean;
+  uncommitted: WorkingTreeStatus;
+  /**
+   * Set when the working tree is dirty enough to block new operations, per the
+   * `blockOnDirty` setting. Read-only views stay available.
+   */
+  blocked: boolean;
+  blockedReason?: string;
+}
+
+export interface Person {
+  name: string;
+  email: string;
+}
+
+export interface Contributor extends Person {
+  commits: number;
 }
 
 export interface CommitInfo {
   sha: string;
   short: string;
   author: string;
+  /** Kept alongside the name so identities dedupe even when names vary. */
+  authorEmail: string;
   date: string;
   subject: string;
   body: string;
@@ -80,6 +136,36 @@ export interface GroupTargetSummary {
   missing: string[];
 }
 
+export interface TicketFileStat {
+  path: string;
+  added: number;
+  removed: number;
+  /** This ticket added the file. */
+  created: boolean;
+  deleted: boolean;
+}
+
+export interface TicketDependency {
+  /** The ticket being depended upon. */
+  ticket: string | null;
+  label: string;
+  reasons: {
+    path: string;
+    /**
+     * `creates-file`   — the other ticket added this file; picking without it
+     *                    cannot work.
+     * `dominant-churn` — the other ticket wrote most of the changed lines here.
+     */
+    kind: 'creates-file' | 'dominant-churn';
+    /** The other ticket's share of changed lines in this file, 0–1. */
+    share: number;
+    otherLines: number;
+    ourLines: number;
+  }[];
+  /** `hard` when a file would be missing entirely; `soft` when it is heavy overlap. */
+  strength: 'hard' | 'soft';
+}
+
 export interface TicketGroup {
   /** Upper-cased ticket id, or null for the Ungrouped bucket. */
   ticket: string | null;
@@ -88,6 +174,25 @@ export interface TicketGroup {
   commits: ClassifiedCommit[];
   /** Keyed by target branch name. */
   summary: Record<string, GroupTargetSummary>;
+  /** Files this ticket touches, biggest churn first. */
+  files: TicketFileStat[];
+  /** Tickets this one builds on, hard dependencies first. */
+  dependsOn: TicketDependency[];
+  /** Who wrote this ticket's commits, most prolific first. */
+  authors: Contributor[];
+}
+
+/**
+ * Who worked on a branch.
+ *
+ * Note `startedBy`: git records nothing about branch *creation*, so this is the
+ * author of the branch's oldest own commit — a proxy, and the only one that
+ * survives a clone. (Reflogs know who typed `git checkout -b`, but they are
+ * local-only and would be wrong for everyone else.)
+ */
+export interface BranchAuthorship {
+  startedBy?: Person & { date: string; sha: string; short: string };
+  contributors: Contributor[];
 }
 
 export interface ReleaseMatrix {
@@ -95,9 +200,53 @@ export interface ReleaseMatrix {
   branch: string;
   targets: string[];
   base: string;
+  /** Who started and worked on this branch. */
+  authorship: BranchAuthorship;
   groups: TicketGroup[];
   /** Per-target ticket counts for the progress bars. */
   progress: Record<string, { releasedTickets: number; totalTickets: number }>;
+  truncated: boolean;
+  generatedAt: string;
+}
+
+/**
+ * How completely a branch's work has reached the promotion chain.
+ *  merged     — every commit is an ancestor of a chain branch. Exact.
+ *  picked     — every commit is released, some only by cherry-pick. High confidence.
+ *  likely     — full coverage needs a squash/subject guess. Verify by hand.
+ *  unreleased — has work that hasn't shipped.
+ *  skipped    — can't be evaluated or deleted (checked out, or a chain branch).
+ */
+export type BranchSafety = 'merged' | 'picked' | 'likely' | 'unreleased' | 'skipped';
+
+export interface BranchReport {
+  name: string;
+  tip: string;
+  short: string;
+  lastCommitDate: string;
+  lastCommitAuthor: string;
+  lastCommitSubject: string;
+  /** Days since the last commit, for spotting stale branches. */
+  ageDays: number;
+  safety: BranchSafety;
+  /** The most downstream chain branch it is fully released to. */
+  releasedTo?: string;
+  /** How the weakest commit was matched, so "picked" vs "merged" is explainable. */
+  weakestMethod?: ReleaseMethod;
+  totalCommits: number;
+  unreleasedCount: number;
+  /** Who started the branch and who worked on it. */
+  authorship: BranchAuthorship;
+  /** git's own `branch -d` would accept it; no force needed. */
+  fastDelete: boolean;
+  /** Present when the branch can't be acted on. */
+  note?: string;
+}
+
+export interface CleanupReport {
+  chain: string[];
+  branches: BranchReport[];
+  /** Classification stopped early because there were too many branches. */
   truncated: boolean;
   generatedAt: string;
 }

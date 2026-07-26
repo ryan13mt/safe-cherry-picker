@@ -6,6 +6,9 @@ import type {
   OpResult,
   OpStatus,
   ConflictReport,
+  BrowseResult,
+  ScanInfo,
+  CleanupReport,
   GitCommandRecord,
 } from '../../shared/types.ts';
 
@@ -36,6 +39,8 @@ export interface AppConfigView {
   chain: string[];
   jiraBaseUrl: string;
   ticketPattern: string;
+  scanTruncated: boolean;
+  scanVisited: number;
 }
 
 export interface BranchList extends RepoSummary {
@@ -46,6 +51,9 @@ export type OpResponse = OpResult & { preview: string[]; simulation?: Simulation
 
 export const api = {
   config: () => request<AppConfigView>('/config'),
+  browse: (path?: string) =>
+    request<BrowseResult>(`/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  setScanRoot: (path: string) => post<ScanInfo>('/config/scan-root', { path }),
   commands: () => request<GitCommandRecord[]>('/commands'),
   repos: (refresh = false) => request<RepoSummary[]>(`/repos${refresh ? '?refresh=1' : ''}`),
   branches: (id: string) => request<BranchList>(`/repos/${id}/branches`),
@@ -66,6 +74,9 @@ export const api = {
   ) => post<OpResponse>(`/repos/${id}/cherry-pick`, body),
   merge: (id: string, body: { from: string; into: string; noFf?: boolean; dryRun?: boolean }) =>
     post<OpResponse>(`/repos/${id}/merge`, body),
+  cleanup: (id: string) => request<CleanupReport>(`/repos/${id}/cleanup`),
+  deleteBranch: (id: string, name: string) =>
+    post<{ name: string; deleted: string; preview: string[] }>(`/repos/${id}/delete-branch`, { name }),
   opStatus: (id: string) => request<OpStatus>(`/repos/${id}/op/status`),
   opContinue: (id: string) => post<OpResponse>(`/repos/${id}/op/continue`, {}),
   opAbort: (id: string) => post<OpResponse>(`/repos/${id}/op/abort`, {}),

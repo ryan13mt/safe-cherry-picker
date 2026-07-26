@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,6 +10,13 @@ export interface AppConfig {
   scanDepth: number;
   /** Ordered upstream -> downstream. Promotion merges chain[i] into chain[i+1]. */
   chain: string[];
+  /**
+   * Refuse to start operations while the repo has uncommitted changes.
+   *  'any'     — modifications or untracked files (default)
+   *  'tracked' — modifications only; stray untracked files are tolerated
+   *  'off'     — no check
+   */
+  blockOnDirty: 'any' | 'tracked' | 'off';
   maxBranchCommits: number;
   maxTargetIndexCommits: number;
   ticketPattern: string;
@@ -22,6 +29,7 @@ const defaults: AppConfig = {
   scanRoot: path.resolve(projectRoot, '..'),
   scanDepth: 3,
   chain: ['develop', 'stable', 'prod'],
+  blockOnDirty: 'any',
   maxBranchCommits: 1000,
   maxTargetIndexCommits: 5000,
   ticketPattern: '^\\s*\\[([A-Za-z][A-Za-z0-9]*-\\d+)\\]',
@@ -52,6 +60,23 @@ export function loadConfig(): AppConfig {
   merged.scanRoot = path.resolve(merged.scanRoot);
   cached = merged;
   return merged;
+}
+
+export const LOCAL_CONFIG_FILE = '.gcprc.local.json';
+
+/**
+ * Persists an override to `.gcprc.local.json` and reloads.
+ *
+ * The local file exists precisely so machine-specific choices — which folder to
+ * scan, above all — don't have to be committed. Writing here rather than to
+ * `.gcprc.json` keeps the checked-in defaults intact.
+ */
+export function persistLocalConfig(patch: Partial<AppConfig>): AppConfig {
+  const file = path.join(projectRoot, LOCAL_CONFIG_FILE);
+  const merged = { ...readIfPresent(file), ...patch };
+  writeFileSync(file, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
+  cached = null; // force a reload so the change takes effect without a restart
+  return loadConfig();
 }
 
 /** Test hook: override config without touching disk. */

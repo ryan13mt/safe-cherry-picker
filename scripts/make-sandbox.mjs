@@ -44,11 +44,31 @@ function write(file, contents) {
   writeFileSync(full, contents, 'utf8');
 }
 
+// A handful of people, so per-ticket attribution and "who started this branch"
+// have something to show.
+const PEOPLE = {
+  ana: { name: 'Ana Sousa', email: 'ana.sousa@example.invalid' },
+  ben: { name: 'Ben Ito', email: 'ben.ito@example.invalid' },
+  chris: { name: 'Chris Vale', email: 'chris.vale@example.invalid' },
+  dana: { name: 'Dana Reyes', email: 'dana.reyes@example.invalid' },
+};
+let author = PEOPLE.ana;
+
+/** Sets who authors the commits that follow. */
+function as(person) {
+  author = person;
+}
+
 function commit(message, hours = 5) {
   clock += hours * HOUR;
   const stamp = `${clock} +0000`;
   git(['add', '-A']);
-  git(['commit', '-m', message], { GIT_AUTHOR_DATE: stamp, GIT_COMMITTER_DATE: stamp });
+  git(['commit', '-m', message], {
+    GIT_AUTHOR_DATE: stamp,
+    GIT_COMMITTER_DATE: stamp,
+    GIT_AUTHOR_NAME: author.name,
+    GIT_AUTHOR_EMAIL: author.email,
+  });
   return git(['rev-parse', 'HEAD']);
 }
 
@@ -130,9 +150,11 @@ export function makeSandbox(dir = DEFAULT_DIR) {
 
   write('src/refunds.js', 'export function refund(id) {\n  return { id, status: "pending" };\n}\n');
   const r1 = commit('[PAY-1042] add refund endpoint');
+  as(PEOPLE.ben);
 
   write('src/ledger.js', 'export function record(entry) {\n  return [entry];\n}\n');
   const r2 = commit('[PAY-1043] add ledger write path');
+  as(PEOPLE.ana);
 
   mod('src/refunds.js', [
     'export function refund(id) {',
@@ -152,7 +174,9 @@ export function makeSandbox(dir = DEFAULT_DIR) {
     '  return [entry];',
     '}',
   ]);
+  as(PEOPLE.ben);
   const r5 = commit('[PAY-1043] validate ledger entries');
+  as(PEOPLE.chris);
 
   // Squash-merged downstream later: patch differs, only the subject survives.
   write('src/notifications.js', 'export function notify(user) {\n  return `sent to ${user}`;\n}\n');
@@ -200,11 +224,15 @@ export function makeSandbox(dir = DEFAULT_DIR) {
   // PAY-1100 and PAY-1101 take turns editing the same file. Picking PAY-1101
   // alone skips a commit it builds on, so it genuinely conflicts — while
   // PAY-1103 touches only its own file and picks cleanly.
+  // Dana owns PAY-1100 and Chris owns PAY-1101, interleaved in one file — so the
+  // dependency between them also has two different people behind it.
   const fraud = 'feature/PAY-1100-fraud-checks';
   checkout(fraud, 'develop');
+  as(PEOPLE.dana);
 
   write('src/fraud.js', ['export function score(txn) {', '  return 0;', '}'].join('\n') + '\n');
   commit('[PAY-1100] add fraud scoring stub');
+  as(PEOPLE.chris);
 
   mod('src/fraud.js', [
     'export function score(txn) {',
@@ -214,6 +242,7 @@ export function makeSandbox(dir = DEFAULT_DIR) {
     '}',
   ]);
   commit('[PAY-1101] weight large transactions');
+  as(PEOPLE.dana);
 
   mod('src/fraud.js', [
     'export function score(txn) {',

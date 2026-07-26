@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { RepoBuilder } from './repo-builder.ts';
+import { setConfig } from '../server/config.ts';
 import { hasSequencerState } from '../server/services/worktree.ts';
 import {
   cherryPick,
@@ -26,6 +27,7 @@ let repo: RepoBuilder;
 beforeEach(() => {
   repo = new RepoBuilder('prod');
   repo.use(['develop', 'stable', 'prod']);
+  setConfig({ blockOnDirty: 'any' });
 });
 afterEach(() => repo.dispose());
 
@@ -776,6 +778,9 @@ describe('leftover sequencer state', () => {
 
 describe('worktree isolation', () => {
   it('never touches the checkout, even across a conflict and abort', async () => {
+    // See the note in ops.test.ts: the guard would refuse to start with a dirty
+    // tree, but the isolation guarantee must hold when it is switched off.
+    setConfig({ blockOnDirty: 'off' });
     baseline();
     const sha = repo.write('app.txt', 'line 1\nwork\n').commit('work edit');
     repo.checkout('stable');

@@ -63,6 +63,14 @@ export class RepoBuilder {
     return this;
   }
 
+  /** Who authors subsequent commits, for testing per-ticket attribution. */
+  private author = { name: 'Edge Bot', email: 'edge@example.invalid' };
+
+  as(name: string, email = `${name.toLowerCase().replace(/\s+/g, '.')}@example.invalid`): this {
+    this.author = { name, email };
+    return this;
+  }
+
   commit(message: string): string {
     this.clock += 3600;
     const stamp = `${this.clock} +0000`;
@@ -70,6 +78,8 @@ export class RepoBuilder {
     this.run(['commit', '-m', message], {
       GIT_AUTHOR_DATE: stamp,
       GIT_COMMITTER_DATE: stamp,
+      GIT_AUTHOR_NAME: this.author.name,
+      GIT_AUTHOR_EMAIL: this.author.email,
     });
     return this.run(['rev-parse', 'HEAD']);
   }
@@ -81,6 +91,8 @@ export class RepoBuilder {
     this.run(['commit', '-m', message], {
       GIT_AUTHOR_DATE: stamp,
       GIT_COMMITTER_DATE: stamp,
+      GIT_AUTHOR_NAME: this.author.name,
+      GIT_AUTHOR_EMAIL: this.author.email,
     });
     return this.run(['rev-parse', 'HEAD']);
   }

@@ -132,6 +132,12 @@ export interface GitOptions {
    * `clean -fd`, which are never permitted against the user's own checkout.
    */
   scratch?: boolean;
+  /**
+   * Unlocks `git branch -D`. Required because a branch released by cherry-pick
+   * is finished but not an ancestor, so git's own `-d` refuses it. Callers must
+   * have confirmed the work is released first; nothing else may set this.
+   */
+  forceDelete?: boolean;
   /** Return the non-zero result instead of throwing. */
   allowFail?: boolean;
   timeoutMs?: number;
@@ -239,11 +245,12 @@ export function assertAllowed(args: string[], opts: GitOptions): void {
   for (const arg of args) {
     if (FORCE_FLAGS.test(arg)) {
       // `clean` and `rm` genuinely require -f to act on a modified or conflicted
-      // file, and both are confined to the scratch worktree anyway. Every other
-      // use of a force flag is refused.
-      const legitimateForce =
-        (sub === 'clean' || sub === 'rm') && (arg === '-f' || arg === '--force');
-      if (!legitimateForce) {
+      // file, and both are confined to the scratch worktree anyway.
+      const fileForce = (sub === 'clean' || sub === 'rm') && (arg === '-f' || arg === '--force');
+      // `branch -D` is the only way to remove a branch that shipped by
+      // cherry-pick, and is gated on the caller having verified that first.
+      const branchForce = sub === 'branch' && arg === '-D' && opts.forceDelete === true;
+      if (!fileForce && !branchForce) {
         throw new GitPolicyError(`Refusing to run git ${sub} with ${arg}.`);
       }
     }

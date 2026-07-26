@@ -1,8 +1,9 @@
 import { loadConfig } from '../config.ts';
-import { logCommits } from './commits.ts';
+import { logCommits, authorshipOf } from './commits.ts';
 import { localBranches } from './discover.ts';
 import { classify, findBase } from './release.ts';
-import { groupCommits, ticketProgress } from './grouping.ts';
+import { groupCommits, ticketProgress, extractTicket } from './grouping.ts';
+import { analyseDependencies } from './dependencies.ts';
 import type { ReleaseMatrix } from '../../shared/types.ts';
 
 /** Ties the classifier and the grouper together into the screen the UI renders. */
@@ -47,13 +48,34 @@ export async function buildMatrix(
     commits: limited,
   });
 
-  const groups = groupCommits({ commits: limited, statuses, targets, branchName: branch });
+  // Ticket assignment has to exist before dependencies can be attributed, so
+  // resolve it once here and reuse it for both.
+  const ticketOf = new Map<string, string | null>(
+    limited.map((c) => [c.sha, extractTicket(c.subject, branch).ticket]),
+  );
+  const { files, dependencies } = await analyseDependencies({
+    repoPath,
+    base,
+    branch,
+    commits: limited,
+    ticketOf,
+  });
+
+  const groups = groupCommits({
+    commits: limited,
+    statuses,
+    targets,
+    branchName: branch,
+    files,
+    dependencies,
+  });
 
   return {
     repoId,
     branch,
     targets,
     base,
+    authorship: authorshipOf(limited),
     groups,
     progress: ticketProgress(groups, targets),
     truncated,

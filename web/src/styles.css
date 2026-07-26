@@ -85,6 +85,8 @@ main { padding-top: 24px; }
 .banner p { margin: 6px 0; }
 .banner-warn { border-color: var(--tone-likely); background: #221c10; }
 .banner-error { border-color: var(--tone-partial); background: #241419; align-items: center; }
+.banner-block { border-color: var(--tone-partial); background: #221419; }
+.banner-block .file-list { max-height: 180px; overflow-y: auto; }
 .banner-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .file-list { margin: 6px 0; padding-left: 18px; }
 
@@ -133,6 +135,12 @@ table.matrix thead th { background: var(--surface-2); font-size: 12px; color: va
 .commit-row { background: var(--bg); font-size: 13px; }
 .commit-cell { padding-left: 44px !important; display: flex; gap: 10px; align-items: baseline; }
 
+.dep-row td { padding: 0 !important; }
+.dep-detail { padding: 10px 14px 10px 44px; font-size: 12.5px; background: #f7768e0d; }
+.dep-detail > div + div { margin-top: 8px; }
+.dep-detail strong { color: var(--tone-partial); font-weight: 600; }
+.dep-detail ul { margin: 4px 0 0; padding-left: 18px; color: var(--muted); }
+
 .expander { background: none; border: none; color: var(--muted); padding: 0 4px; font-size: 12px; }
 .ticket-chip {
   display: inline-block; padding: 2px 8px; border-radius: 999px;
@@ -177,6 +185,101 @@ table.matrix thead th { background: var(--surface-2); font-size: 12px; color: va
 .graph-subject { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .graph-targets { display: flex; gap: 6px; }
 .dot { width: 22px; text-align: center; }
+
+/* ---------- command log ---------- */
+.command-log {
+  margin-top: 28px; padding: 12px 18px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+}
+.command-log summary { cursor: pointer; color: var(--muted); }
+.command-log-bar { display: flex; gap: 10px; align-items: center; margin: 12px 0 8px; }
+/* The ring buffer holds 200 entries; without a cap the page grows to absurdity. */
+.command-scroll {
+  max-height: 380px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+}
+.command-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.command-table td { padding: 3px 8px; border-top: 1px solid #ffffff08; vertical-align: baseline; }
+.command-time { width: 90px; font-size: 11px; }
+.command-args code { color: var(--tone-traced); word-break: break-all; }
+.command-meta { width: 120px; text-align: right; font-size: 11px; }
+.command-failed .command-args code { color: var(--tone-partial); }
+
+/* ---------- people ---------- */
+.people { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.person { display: inline-flex; gap: 5px; align-items: center; font-size: 12px; white-space: nowrap; }
+.person-initials {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.02em;
+}
+.person-name { color: var(--muted); }
+.person-count { font-size: 10.5px; }
+.authorship { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cleanup-people { white-space: nowrap; }
+
+/* ---------- misc affordances ---------- */
+.tab-badge {
+  display: inline-block; margin-left: 7px; padding: 0 6px;
+  border-radius: 999px; background: var(--surface); border: 1px solid var(--border);
+  font-size: 11px; color: var(--muted);
+}
+.tab.active .tab-badge { color: var(--text); border-color: var(--accent); }
+.worktree-path { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.preview h3 { display: flex; align-items: center; gap: 10px; }
+.preview-actions { margin-left: auto; display: flex; gap: 6px; }
+.matrix-filter {
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px;
+  min-width: 220px;
+}
+.diffstat { white-space: nowrap; }
+.stat-add { color: var(--tone-released); }
+.stat-del { color: var(--tone-partial); }
+
+/* ---------- cleanup ---------- */
+.cleanup-head { display: flex; align-items: center; gap: 16px; margin-bottom: 8px; }
+.cleanup-head p { margin: 0; flex: 1; }
+.cleanup-group {
+  margin-top: 16px; padding: 14px 18px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+}
+.cleanup-group h3 { margin: 0 0 4px; font-size: 14px; display: flex; align-items: center; gap: 10px; }
+.cleanup-group > p { margin: 0 0 10px; }
+.cleanup-table { width: 100%; border-collapse: collapse; }
+.cleanup-table td { padding: 6px 10px; border-top: 1px solid var(--border); vertical-align: baseline; }
+.cleanup-table tr:first-child td { border-top: none; }
+.cleanup-name { display: flex; gap: 10px; align-items: baseline; }
+.cleanup-name code { color: var(--text); font-weight: 600; }
+.cleanup-table td:last-child { text-align: right; width: 90px; }
+
+/* ---------- folder picker ---------- */
+.scan-root { margin: 10px 0 0; }
+.scan-root code { color: var(--text); }
+
+.modal.picker { width: min(640px, 100%); display: flex; flex-direction: column; }
+.picker-bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 14px 0 8px; }
+.picker-path { display: flex; gap: 8px; margin-bottom: 10px; }
+.picker-path input {
+  flex: 1; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px;
+  font-family: 'Cascadia Mono', ui-monospace, Consolas, monospace; font-size: 12.5px;
+}
+
+.picker-list {
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+  height: 320px; overflow-y: auto;
+}
+.picker-list ul { list-style: none; margin: 0; padding: 4px; }
+.picker-list > p { padding: 14px; margin: 0; }
+.picker-entry {
+  width: 100%; display: flex; align-items: center; gap: 10px; text-align: left;
+  background: none; border: none; padding: 6px 10px; border-radius: 6px; color: var(--text);
+}
+.picker-entry:hover { background: var(--surface-2); }
+.picker-icon { color: var(--muted); width: 12px; }
+.picker-entry .chip { margin-left: auto; }
+.picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- conflict viewer ---------- */
 .conflicts {

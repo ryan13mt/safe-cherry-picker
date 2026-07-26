@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { CopyButton } from './CopyButton.tsx';
 import type { SimulationResult } from '../../../shared/types.ts';
 
 /**
@@ -13,6 +14,8 @@ export interface OpPlan {
   simulation?: SimulationResult;
   /** Shown when the operation offers an individual/squash choice. */
   styleChoice?: boolean;
+  /** Markdown notes for a promotion, offered as a copy button. */
+  releaseNotes?: string;
 }
 
 export function OpDialog({
@@ -121,7 +124,19 @@ export function OpDialog({
         )}
 
         <div className="preview">
-          <h3>Commands to run</h3>
+          <h3>
+            Commands to run
+            <span className="preview-actions">
+              <CopyButton text={plan.preview.join('\n')} label="Copy commands" />
+              {plan.releaseNotes && (
+                <CopyButton
+                  text={plan.releaseNotes}
+                  label="Copy release notes"
+                  title="Markdown summary of every ticket in this promotion"
+                />
+              )}
+            </span>
+          </h3>
           <pre>
             {plan.preview.map((line) => (
               <div key={line}>{line}</div>

@@ -1,7 +1,13 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import type { ReleaseMatrix as Matrix, SimulationResult, TicketGroup } from '../../../shared/types.ts';
+import type {
+  ReleaseMatrix as Matrix,
+  SimulationResult,
+  TicketDependency,
+  TicketGroup,
+} from '../../../shared/types.ts';
 import { statusLook, groupStateLook, ticketColour } from '../status.tsx';
 import { CommitGraph } from '../components/CommitGraph.tsx';
+import { People, Authorship } from '../components/People.tsx';
 
 /**
  * The core screen: what of this branch has shipped, ticket by ticket, and what
@@ -25,6 +31,65 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
  * targets[0] means landing on the branch the work was merged into, where every
  * checkbox is disabled and the screen looks broken.
  */
+/**
+ * A dependency only matters if the ticket it points at isn't already on the
+ * branch you're picking into — that's the difference between "these two were
+ * written together" and "this pick will break".
+ */
+function unmetDependencies(matrix: Matrix, group: TicketGroup, target: string) {
+  const stateOf = (ticket: string | null) =>
+    matrix.groups.find((g) => g.ticket === ticket)?.summary[target]?.state;
+  return group.dependsOn.filter((dep) => {
+    const state = stateOf(dep.ticket);
+    // Unknown means the dependency isn't on this branch at all, so it counts.
+    return state !== 'released';
+  });
+}
+
+function DependencyNote({ deps, target }: { deps: TicketDependency[]; target: string }) {
+  if (deps.length === 0) return null;
+  const hard = deps.filter((d) => d.strength === 'hard');
+  return (
+    <span
+      className={hard.length ? 'chip tone-partial' : 'chip tone-likely'}
+      title={deps
+        .map((d) =>
+          [
+            `${d.label} — ${d.strength === 'hard' ? 'required' : 'heavy overlap'}`,
+            ...d.reasons.map((r) =>
+              r.kind === 'creates-file'
+                ? `  ${r.path}: created by ${d.label}`
+                : `  ${r.path}: ${Math.round(r.share * 100)}% of changes are ${d.label}'s (${r.otherLines} lines)`,
+            ),
+          ].join('\n'),
+        )
+        .join('\n\n')}
+    >
+      {hard.length ? '⚠ needs' : '~ overlaps'} {deps.map((d) => d.label).join(', ')}
+      {` (not on ${target})`}
+    </span>
+  );
+}
+
+/** "5 files · +120 −30", from churn the dependency analysis already computed. */
+function DiffStat({ group }: { group: TicketGroup }) {
+  if (group.files.length === 0) return null;
+  const added = group.files.reduce((n, f) => n + f.added, 0);
+  const removed = group.files.reduce((n, f) => n + f.removed, 0);
+  return (
+    <span
+      className="muted small diffstat"
+      title={group.files
+        .map((f) => `${f.path}  +${f.added} −${f.removed}${f.created ? '  (new)' : f.deleted ? '  (deleted)' : ''}`)
+        .join('\n')}
+    >
+      {group.files.length} file{group.files.length === 1 ? '' : 's'}
+      <span className="stat-add"> +{added}</span>
+      <span className="stat-del"> −{removed}</span>
+    </span>
+  );
+}
+
 function defaultTarget(matrix: Matrix): string {
   const withWork = matrix.targets.find((t) => {
     const p = matrix.progress[t];
@@ -36,12 +101,15 @@ function defaultTarget(matrix: Matrix): string {
 export function ReleaseMatrixView({
   matrix,
   branches,
+  blocked,
   onBranchChange,
   onCherryPick,
   simulate,
 }: {
   matrix: Matrix;
   branches: string[];
+  /** Uncommitted changes present: the matrix still renders, actions are not offered. */
+  blocked: boolean;
   onBranchChange: (branch: string) => void;
   onCherryPick: (target: string, commits: string[], simulation: SimulationResult | null) => void;
   simulate: (target: string, commits: string[]) => Promise<SimulationResult>;
@@ -49,6 +117,7 @@ export function ReleaseMatrixView({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [target, setTarget] = useState<string>(() => defaultTarget(matrix));
+  const [filter, setFilter] = useState('');
   const [sim, setSim] = useState<SimulationResult | null>(null);
   const [simBusy, setSimBusy] = useState(false);
 
@@ -108,6 +177,35 @@ export function ReleaseMatrixView({
 
   const allCommits = matrix.groups.flatMap((g) => g.commits);
 
+  const needle = filter.trim().toLowerCase();
+  const visibleGroups = needle
+    ? matrix.groups.filter(
+        (g) =>
+          g.label.toLowerCase().includes(needle) ||
+          g.commits.some((c) => c.commit.subject.toLowerCase().includes(needle)),
+      )
+    : matrix.groups;
+
+  // Dependencies of the tickets actually selected — the ones about to bite.
+  const selectedGroups = matrix.groups.filter((g) =>
+    g.commits.some((c) => selected.has(c.commit.sha)),
+  );
+  const selectedTickets = new Set(selectedGroups.map((g) => g.ticket));
+  const blockingDeps = selectedGroups
+    .flatMap((g) => unmetDependencies(matrix, g, target))
+    // A dependency you're picking at the same time isn't a problem.
+    .filter((d) => !selectedTickets.has(d.ticket));
+
+  /** Ticks the outstanding commits of everything the selection depends on. */
+  const addRequiredTickets = () => {
+    const next = new Set(selected);
+    for (const dep of blockingDeps) {
+      const group = matrix.groups.find((g) => g.ticket === dep.ticket);
+      for (const sha of group?.summary[target]?.missing ?? []) next.add(sha);
+    }
+    setSelected(next);
+  };
+
   return (
     <div className="matrix-view">
       <div className="matrix-toolbar">
@@ -121,10 +219,20 @@ export function ReleaseMatrixView({
             ))}
           </select>
         </label>
+        <input
+          className="matrix-filter"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter by ticket or subject"
+          aria-label="Filter tickets"
+        />
         <span className="muted">
-          {allCommits.length} commits in {matrix.groups.length} tickets since{' '}
-          <code>{matrix.base.slice(0, 7)}</code>
+          {needle
+            ? `${visibleGroups.length} of ${matrix.groups.length} tickets`
+            : `${allCommits.length} commits in ${matrix.groups.length} tickets`}{' '}
+          since <code>{matrix.base.slice(0, 7)}</code>
         </span>
+        <Authorship authorship={matrix.authorship} />
         {matrix.truncated && (
           <span className="warn-text">Truncated — branch exceeds the configured commit cap.</span>
         )}
@@ -155,7 +263,7 @@ export function ReleaseMatrixView({
               </tr>
             </thead>
             <tbody>
-              {matrix.groups.map((group) => {
+              {visibleGroups.map((group) => {
                 const key = group.ticket ?? '__ungrouped__';
                 const isOpen = expanded.has(key);
                 const actionable = group.summary[target]?.missing ?? [];
@@ -196,6 +304,9 @@ export function ReleaseMatrixView({
                         <span className="muted">
                           {group.commits.length} commit{group.commits.length === 1 ? '' : 's'}
                         </span>
+                        <DiffStat group={group} />
+                        <People people={group.authors} max={2} />
+                        <DependencyNote deps={unmetDependencies(matrix, group, target)} target={target} />
                       </td>
                       {matrix.targets.map((t) => {
                         const summary = group.summary[t];
@@ -214,6 +325,38 @@ export function ReleaseMatrixView({
                         );
                       })}
                     </tr>
+
+                    {isOpen && group.dependsOn.length > 0 && (
+                      <tr className="commit-row dep-row">
+                        <td></td>
+                        <td colSpan={matrix.targets.length + 1}>
+                          <div className="dep-detail">
+                            {group.dependsOn.map((dep) => (
+                              <div key={dep.label}>
+                                <strong>
+                                  {dep.strength === 'hard' ? 'Requires' : 'Overlaps with'} {dep.label}
+                                </strong>
+                                <ul>
+                                  {dep.reasons.map((r) => (
+                                    <li key={r.path}>
+                                      <code>{r.path}</code>{' '}
+                                      {r.kind === 'creates-file' ? (
+                                        <>created by {dep.label}</>
+                                      ) : (
+                                        <>
+                                          {Math.round(r.share * 100)}% of the changed lines are{' '}
+                                          {dep.label}'s ({r.otherLines} vs {r.ourLines})
+                                        </>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
 
                     {isOpen &&
                       group.commits.map((c) => (
@@ -275,6 +418,26 @@ export function ReleaseMatrixView({
               {selectedList.length} commit{selectedList.length === 1 ? '' : 's'} selected
             </span>
 
+            {blockingDeps.length > 0 && (
+              <span
+                className={
+                  blockingDeps.some((d) => d.strength === 'hard') ? 'sim-inline bad' : 'sim-inline warn-text'
+                }
+                title={blockingDeps
+                  .flatMap((d) => d.reasons.map((r) => `${r.path} — ${d.label}`))
+                  .join('\n')}
+              >
+                {blockingDeps.some((d) => d.strength === 'hard') ? '⚠ needs' : '~ overlaps'}{' '}
+                {[...new Set(blockingDeps.map((d) => d.label))].join(', ')} first
+              </span>
+            )}
+
+            {blockingDeps.length > 0 && (
+              <button className="ghost small" onClick={addRequiredTickets}>
+                Add {[...new Set(blockingDeps.map((d) => d.label))].join(', ')}
+              </button>
+            )}
+
             {simBusy && <span className="muted">simulating…</span>}
             {!simBusy && sim && (
               <span className={sim.clean ? 'sim-inline good' : 'sim-inline bad'}>
@@ -286,7 +449,8 @@ export function ReleaseMatrixView({
 
             <button
               className="primary"
-              disabled={selectedList.length === 0 || !target}
+              disabled={selectedList.length === 0 || !target || blocked}
+              title={blocked ? 'Blocked: the repository has uncommitted changes' : undefined}
               onClick={() => onCherryPick(target, selectedList, sim)}
             >
               Cherry-pick into {target}

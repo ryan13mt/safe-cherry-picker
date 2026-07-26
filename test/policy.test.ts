@@ -67,10 +67,25 @@ describe('git policy', () => {
 
   it('refuses force flags, except -f for git clean', () => {
     expect(() => assertAllowed(['merge', '--force'], { ...worktree, write: true })).toThrow(/--force/);
-    expect(() => assertAllowed(['branch', '-D', 'x'], { ...checkout, write: true })).toThrow(/-D/);
     expect(() =>
       assertAllowed(['clean', '-f', '-d'], { ...worktree, write: true, scratch: true }),
     ).not.toThrow();
+  });
+
+  it('gates branch -D behind an explicit opt-in', () => {
+    // Needed for branches that shipped by cherry-pick, since git's own -d only
+    // understands ancestry — but never available by accident.
+    expect(() => assertAllowed(['branch', '-D', 'x'], { ...checkout, write: true })).toThrow(/-D/);
+    expect(() =>
+      assertAllowed(['branch', '-D', 'x'], { ...checkout, write: true, forceDelete: true }),
+    ).not.toThrow();
+    // The opt-in unlocks nothing else.
+    expect(() =>
+      assertAllowed(['merge', '--force'], { ...worktree, write: true, forceDelete: true }),
+    ).toThrow(/--force/);
+    expect(() =>
+      assertAllowed(['push', '--force'], { ...checkout, write: true, forceDelete: true }),
+    ).toThrow(/not permitted/);
   });
 
   it('restricts update-ref to branches and requires a compare-and-swap', () => {

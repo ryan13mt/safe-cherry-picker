@@ -11,6 +11,9 @@ export function newFixture(): Fixture {
     scanRoot: fx.repo,
     chain: ['develop', 'stable', 'prod'],
     jiraBaseUrl: '',
+    // Explicit, so a test that ran earlier with the check off can't leak into
+    // this one through the shared config cache.
+    blockOnDirty: 'any',
   });
   return fx;
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, type BranchList, type OpResponse } from './api.ts';
+import { api, type AppConfigView, type BranchList, type OpResponse } from './api.ts';
 import type {
   PipelineReport,
   ReleaseMatrix as Matrix,
@@ -7,23 +7,50 @@ import type {
   SimulationResult,
   OpStatus,
   ConflictReport,
+  CleanupReport,
 } from '../../shared/types.ts';
 import { PipelineView } from './views/PipelineView.tsx';
 import { ReleaseMatrixView } from './views/ReleaseMatrix.tsx';
 import { OpDialog, type OpPlan } from './components/OpDialog.tsx';
 import { ConflictViewer } from './components/ConflictViewer.tsx';
+import { FolderPicker } from './components/FolderPicker.tsx';
+import { CleanupView } from './views/CleanupView.tsx';
+import { CommandLog } from './components/CommandLog.tsx';
+import { CopyButton } from './components/CopyButton.tsx';
+import { buildReleaseNotes } from './releaseNotes.ts';
 
-type Tab = 'pipeline' | 'matrix';
+type Tab = 'pipeline' | 'matrix' | 'cleanup';
 
 type PendingOp =
   | { kind: 'cherry-pick'; target: string; commits: string[] }
   | { kind: 'merge'; from: string; into: string };
 
+/**
+ * Remembers the last repo, branch and tab. Small, but it removes a bit of
+ * friction every time the app is opened.
+ */
+const remember = {
+  get(key: string): string | null {
+    try {
+      return localStorage.getItem(`gcp.${key}`);
+    } catch {
+      return null; // storage disabled; carry on without it
+    }
+  },
+  set(key: string, value: string): void {
+    try {
+      localStorage.setItem(`gcp.${key}`, value);
+    } catch {
+      /* ignore */
+    }
+  },
+};
+
 export function App() {
   const [repos, setRepos] = useState<RepoSummary[]>([]);
   const [repoId, setRepoId] = useState<string>('');
   const [branchInfo, setBranchInfo] = useState<BranchList | null>(null);
-  const [tab, setTab] = useState<Tab>('pipeline');
+  const [tab, setTab] = useState<Tab>(() => (remember.get('tab') as Tab | null) ?? 'pipeline');
 
   const [pipeline, setPipeline] = useState<PipelineReport | null>(null);
   const [matrix, setMatrix] = useState<Matrix | null>(null);
@@ -31,20 +58,60 @@ export function App() {
 
   const [opStatus, setOpStatus] = useState<OpStatus | null>(null);
   const [conflicts, setConflicts] = useState<ConflictReport | null>(null);
+  const [cleanup, setCleanup] = useState<CleanupReport | null>(null);
   const [plan, setPlan] = useState<{ plan: OpPlan; op: PendingOp } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [config, setConfig] = useState<AppConfigView | null>(null);
+  const [pickingFolder, setPickingFolder] = useState(false);
+
+  const loadRepos = useCallback(async () => {
+    const [list, cfg] = await Promise.all([api.repos(true), api.config()]);
+    setRepos(list);
+    setConfig(cfg);
+    setRepoId(list.length ? list[0].id : '');
+    return list;
+  }, []);
 
   useEffect(() => {
-    api
-      .repos()
-      .then((list) => {
+    Promise.all([api.repos(), api.config()])
+      .then(([list, cfg]) => {
         setRepos(list);
-        if (list.length && !repoId) setRepoId(list[0].id);
+        setConfig(cfg);
+        if (list.length && !repoId) {
+          // Restore the last repo only if it's still there.
+          const saved = remember.get('repoId');
+          setRepoId(list.some((r) => r.id === saved) ? saved! : list[0].id);
+        }
       })
       .catch((e) => setError(e.message));
   }, []);
+
+  useEffect(() => {
+    if (repoId) remember.set('repoId', repoId);
+  }, [repoId]);
+
+  useEffect(() => remember.set('tab', tab), [tab]);
+
+  useEffect(() => {
+    if (repoId && branch) remember.set(`branch.${repoId}`, branch);
+  }, [repoId, branch]);
+
+  const chooseFolder = async (folder: string) => {
+    const info = await api.setScanRoot(folder);
+    // Clear anything belonging to the old folder before the new list arrives.
+    setBranchInfo(null);
+    setPipeline(null);
+    setMatrix(null);
+    setBranch('');
+    const list = await loadRepos();
+    setPickingFolder(false);
+    setToast(
+      `${info.scanRoot} — ${list.length} ${list.length === 1 ? 'repo' : 'repos'} found` +
+        (info.truncated ? `, stopped after ${info.visited} folders` : ''),
+    );
+  };
 
   const refreshRepo = useCallback(async () => {
     if (!repoId) return;
@@ -60,10 +127,13 @@ export function App() {
       setOpStatus(status);
       setConflicts(status.inProgress ? await api.conflicts(repoId) : null);
 
+      const saved = remember.get(`branch.${repoId}`);
       const preferred =
         branch && info.branches.includes(branch)
           ? branch
-          : info.branches.find((b) => !info.chain.includes(b)) ?? info.branches[0] ?? '';
+          : saved && info.branches.includes(saved)
+            ? saved
+            : (info.branches.find((b) => !info.chain.includes(b)) ?? info.branches[0] ?? '');
       setBranch(preferred);
     } catch (e) {
       setError((e as Error).message);
@@ -133,6 +203,16 @@ export function App() {
     setError(null);
     try {
       const preview = await api.merge(repoId, { from, into, dryRun: true });
+
+      // The pipeline already holds the commits this merge would bring, so notes
+      // are a formatting job rather than another round trip.
+      const leg = pipeline?.legs.find(
+        (l) =>
+          (l.upstream === from && l.downstream === into) ||
+          (l.downstream === from && l.upstream === into),
+      );
+      const commits = leg ? (leg.upstream === from ? leg.ahead : leg.behind) : [];
+
       setPlan({
         op: { kind: 'merge', from, into },
         plan: {
@@ -141,6 +221,17 @@ export function App() {
             ? `Brings ${into} back in line with ${from}, so the next promotion cannot revert it.`
             : `Merges every commit waiting in ${from}.`,
           preview: preview.preview,
+          simulation: preview.simulation,
+          releaseNotes:
+            commits.length > 0 && config
+              ? buildReleaseNotes({
+                  commits,
+                  ticketPattern: config.ticketPattern,
+                  jiraBaseUrl: config.jiraBaseUrl,
+                  from,
+                  into,
+                })
+              : undefined,
         },
       });
     } catch (e) {
@@ -192,6 +283,37 @@ export function App() {
     }
   };
 
+  // Fetched once per repo in the background so the tab can carry a count, then
+  // refreshed whenever the tab is opened or an operation finishes. Failures are
+  // swallowed: a missing badge is not worth an error banner.
+  useEffect(() => {
+    if (!repoId) return;
+    let cancelled = false;
+    setCleanup(null);
+    api
+      .cleanup(repoId)
+      .then((r) => !cancelled && setCleanup(r))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [repoId, tab === 'cleanup', opStatus?.inProgress]);
+
+  const removeBranch = async (name: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.deleteBranch(repoId, name);
+      setToast(`Deleted ${name}. Restore it with: git branch ${name} ${result.deleted.slice(0, 10)}`);
+      setCleanup(await api.cleanup(repoId));
+      setRepos(await api.repos(true));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const takeSide = async (file: string, choice: 'ours' | 'theirs') => {
     setBusy(true);
     setError(null);
@@ -214,6 +336,18 @@ export function App() {
 
   const repo = repos.find((r) => r.id === repoId);
 
+  // Tab badges: what needs attention, without having to click through.
+  const driftCount = pipeline?.legs.reduce((n, l) => n + l.ahead.length + l.behind.length, 0) ?? 0;
+  const deletableCount =
+    cleanup?.branches.filter((b) => b.safety === 'merged' || b.safety === 'picked').length ?? 0;
+  const outstandingTickets =
+    matrix?.groups.filter((g) =>
+      matrix.targets.some((t) => {
+        const state = g.summary[t]?.state;
+        return state === 'partial' || state === 'pending';
+      }),
+    ).length ?? 0;
+
   return (
     <div className="app">
       <header>
@@ -235,6 +369,9 @@ export function App() {
           >
             Rescan
           </button>
+          <button className="ghost small" onClick={() => setPickingFolder(true)} title={config?.scanRoot}>
+            Change folder…
+          </button>
           {repo && (
             <span className="muted repo-path" title={repo.path}>
               on <strong>{repo.currentBranch ?? 'detached HEAD'}</strong>
@@ -245,9 +382,15 @@ export function App() {
         <nav>
           <button className={tab === 'pipeline' ? 'tab active' : 'tab'} onClick={() => setTab('pipeline')}>
             Pipeline
+            {driftCount > 0 && <span className="tab-badge">{driftCount}</span>}
           </button>
           <button className={tab === 'matrix' ? 'tab active' : 'tab'} onClick={() => setTab('matrix')}>
             Release matrix
+            {outstandingTickets > 0 && <span className="tab-badge">{outstandingTickets}</span>}
+          </button>
+          <button className={tab === 'cleanup' ? 'tab active' : 'tab'} onClick={() => setTab('cleanup')}>
+            Cleanup
+            {deletableCount > 0 && <span className="tab-badge">{deletableCount}</span>}
           </button>
         </nav>
       </header>
@@ -265,8 +408,15 @@ export function App() {
                 : 'Resolve below, or edit the files directly in the worktree.'}{' '}
               Your own checkout is untouched and {opStatus.target} has not moved.
             </p>
-            <p className="muted">
+            <p className="muted worktree-path">
               worktree: <code>{opStatus.worktreePath}</code>
+              {opStatus.worktreePath && (
+                <CopyButton
+                  text={opStatus.worktreePath}
+                  label="Copy path"
+                  title="Copy the worktree path, to open it in your editor"
+                />
+              )}
             </p>
             {opStatus.remaining && opStatus.remaining.length > 0 && (
               <p className="muted">
@@ -313,27 +463,90 @@ export function App() {
         </div>
       )}
 
+      {repo?.blocked && (
+        <div className="banner banner-block">
+          <div>
+            <strong>Actions are blocked — {repo.name} has uncommitted changes</strong>
+            <p>
+              Commit or stash them, then recheck. Viewing is unaffected, and an operation
+              already in progress can still be continued or aborted.
+            </p>
+            <ul className="file-list">
+              {repo.uncommitted.tracked.map((f) => (
+                <li key={`t-${f}`}>
+                  <code>{f}</code> <span className="muted small">modified</span>
+                </li>
+              ))}
+              {repo.uncommitted.untracked.map((f) => (
+                <li key={`u-${f}`}>
+                  <code>{f}</code> <span className="muted small">untracked</span>
+                </li>
+              ))}
+            </ul>
+            {repo.uncommitted.truncated && (
+              <p className="muted small">…and more ({repo.uncommitted.count} in total).</p>
+            )}
+          </div>
+          <div className="banner-actions">
+            <button className="primary" disabled={busy} onClick={() => void refreshRepo()}>
+              Recheck
+            </button>
+          </div>
+        </div>
+      )}
+
+      {config && (
+        <p className="scan-root muted small">
+          scanning <code>{config.scanRoot}</code>
+          {config.scanTruncated && (
+            <span className="warn-text">
+              {' '}
+              — stopped after {config.scanVisited} folders, so some repos may be missing. Pick a
+              narrower folder.
+            </span>
+          )}
+        </p>
+      )}
+
       <main>
-        {repos.length === 0 && <div className="empty">No git repos found under the configured scan root.</div>}
+        {repos.length === 0 && (
+          <div className="empty">
+            <p>No git repositories found under this folder.</p>
+            <button className="primary" onClick={() => setPickingFolder(true)}>
+              Choose a different folder
+            </button>
+          </div>
+        )}
 
         {tab === 'pipeline' && pipeline && (
           <PipelineView
             report={pipeline}
+            blocked={repo?.blocked ?? false}
             onPromote={(from, into) => openMerge(from, into, false)}
             onBackMerge={(from, into) => openMerge(from, into, true)}
           />
         )}
 
+        {tab === 'cleanup' &&
+          (cleanup ? (
+            <CleanupView report={cleanup} busy={busy} onDelete={removeBranch} />
+          ) : (
+            <div className="empty">Working out which branches have shipped…</div>
+          ))}
+
         {tab === 'matrix' && matrix && branchInfo && (
           <ReleaseMatrixView
             matrix={matrix}
             branches={branchInfo.branches}
+            blocked={repo?.blocked ?? false}
             onBranchChange={setBranch}
             onCherryPick={openCherryPick}
             simulate={simulate}
           />
         )}
       </main>
+
+      <CommandLog />
 
       {plan && (
         <OpDialog
@@ -343,6 +556,10 @@ export function App() {
           onConfirm={runPlan}
           onCancel={() => setPlan(null)}
         />
+      )}
+
+      {pickingFolder && (
+        <FolderPicker onCancel={() => setPickingFolder(false)} onChoose={chooseFolder} />
       )}
 
       {toast && <div className="toast">{toast}</div>}

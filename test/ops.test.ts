@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { newFixture, dropFixture, raw, checkoutSnapshot, type Fixture } from './helpers.ts';
+import { setConfig } from '../server/config.ts';
 import { cherryPick, merge, operationStatus, abortOperation, continueOperation } from '../server/services/ops.ts';
 import { buildMatrix } from '../server/services/matrix.ts';
 
@@ -49,6 +50,11 @@ describe('cherry-pick', () => {
   });
 
   it('leaves uncommitted work in the checkout untouched', async () => {
+    // blockOnDirty normally refuses to start here. Disabled deliberately: the
+    // isolation guarantee still has to hold, both because 'off' is a supported
+    // setting and because continue/abort are never blocked for dirtiness.
+    setConfig({ blockOnDirty: 'off' });
+
     const scratchFile = path.join(fx.repo, 'work-in-progress.txt');
     writeFileSync(scratchFile, 'half-finished thought\n', 'utf8');
     const dirtyBefore = raw(fx.repo, ['status', '--porcelain']);

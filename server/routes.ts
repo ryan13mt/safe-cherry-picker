@@ -1,8 +1,17 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { loadConfig } from './config.ts';
+import { loadConfig, persistLocalConfig } from './config.ts';
 import { commandHistory, GitPolicyError } from './git.ts';
-import { discoverRepos, resolveRepo, summarise, localBranches, clearRepoCache } from './services/discover.ts';
+import {
+  discoverRepos,
+  resolveRepo,
+  summarise,
+  localBranches,
+  clearRepoCache,
+  lastScanStats,
+} from './services/discover.ts';
+import { browse, validateScanRoot } from './services/browse.ts';
+import { buildCleanupReport, deleteBranch } from './services/cleanup.ts';
 import { buildPipeline } from './services/pipeline.ts';
 import { buildMatrix } from './services/matrix.ts';
 import { simulateCherryPick } from './services/dryrun.ts';
@@ -38,12 +47,57 @@ function fail(res: import('express').Response, err: unknown): void {
 
 router.get('/config', (_req, res) => {
   const cfg = loadConfig();
+  const scan = lastScanStats();
   res.json({
     scanRoot: cfg.scanRoot,
     chain: cfg.chain,
     jiraBaseUrl: cfg.jiraBaseUrl,
     ticketPattern: cfg.ticketPattern,
+    scanTruncated: scan.truncated,
+    scanVisited: scan.visited,
   });
+});
+
+/**
+ * A filesystem path, not a git revision — so the rules differ from branchSchema.
+ * Absolute Windows and POSIX paths are both fine; control characters are not.
+ */
+const fsPathSchema = z
+  .string()
+  .min(1)
+  .max(4096)
+  .refine((p) => !/[\0\r\n]/.test(p), { message: 'Invalid path' });
+
+router.get('/browse', async (req, res) => {
+  try {
+    const target = req.query.path === undefined ? undefined : fsPathSchema.parse(req.query.path);
+    res.json(await browse(target));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.post('/config/scan-root', async (req, res) => {
+  try {
+    const { path: requested } = z.object({ path: fsPathSchema }).parse(req.body);
+    const resolved = await validateScanRoot(requested);
+
+    persistLocalConfig({ scanRoot: resolved });
+    clearRepoCache();
+
+    // Scan immediately so the response can say what was actually found, rather
+    // than leaving the user to guess whether the folder was a good choice.
+    const repos = await discoverRepos(true);
+    const scan = lastScanStats();
+    res.json({
+      scanRoot: resolved,
+      repoCount: repos.length,
+      truncated: scan.truncated,
+      visited: scan.visited,
+    });
+  } catch (err) {
+    fail(res, err);
+  }
 });
 
 router.get('/commands', (_req, res) => {
@@ -162,6 +216,26 @@ router.post('/repos/:id/merge', async (req, res) => {
       message: body.message,
       dryRun: body.dryRun,
     });
+    res.json({ ...result, preview: previewCommands(result.commands) });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.get('/repos/:id/cleanup', async (req, res) => {
+  try {
+    const repo = await resolveRepo(req.params.id);
+    res.json(await buildCleanupReport(repo.path));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.post('/repos/:id/delete-branch', async (req, res) => {
+  try {
+    const { name } = z.object({ name: branchSchema }).parse(req.body);
+    const repo = await resolveRepo(req.params.id);
+    const result = await deleteBranch(repo.path, name);
     res.json({ ...result, preview: previewCommands(result.commands) });
   } catch (err) {
     fail(res, err);
