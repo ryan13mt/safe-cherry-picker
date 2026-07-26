@@ -16,9 +16,36 @@ describe('git policy', () => {
   });
 
   it('blocks other remote and history-rewriting subcommands', () => {
-    for (const sub of ['pull', 'fetch', 'rebase', 'filter-branch', 'reflog', 'gc']) {
+    for (const sub of ['pull', 'rebase', 'filter-branch', 'reflog', 'gc', 'remote']) {
       expect(() => assertAllowed([sub], { ...checkout, write: true }), sub).toThrow(GitPolicyError);
     }
+  });
+
+  it('allows fetch only on request, and never with a refspec', () => {
+    // Fetch only moves refs/remotes, so it is permitted — but `git fetch origin
+    // main:main` writes a *local* branch, which is why refspecs are refused.
+    expect(() => assertAllowed(['fetch', 'origin'], checkout)).toThrow(/network: true/);
+    expect(() => assertAllowed(['fetch', '--quiet', 'origin'], { ...checkout, network: true })).not.toThrow();
+
+    expect(() =>
+      assertAllowed(['fetch', 'origin', 'main:main'], { ...checkout, network: true }),
+    ).toThrow(/refspec/i);
+    expect(() =>
+      assertAllowed(['fetch', 'origin', '+refs/heads/*:refs/heads/*'], { ...checkout, network: true }),
+    ).toThrow(/refspec/i);
+
+    // Unvetted flags are refused rather than assumed harmless.
+    expect(() =>
+      assertAllowed(['fetch', '--update-head-ok', 'origin'], { ...checkout, network: true }),
+    ).toThrow(/not permitted/);
+
+    // And the opt-in unlocks nothing else.
+    expect(() => assertAllowed(['push', 'origin'], { ...checkout, write: true, network: true })).toThrow(
+      /not permitted/,
+    );
+    expect(() => assertAllowed(['pull'], { ...checkout, write: true, network: true })).toThrow(
+      /not permitted/,
+    );
   });
 
   it('rejects anything not on the allowlist', () => {

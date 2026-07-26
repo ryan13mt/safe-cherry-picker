@@ -12,6 +12,8 @@ import {
 } from './services/discover.ts';
 import { browse, validateScanRoot } from './services/browse.ts';
 import { buildCleanupReport, deleteBranch } from './services/cleanup.ts';
+import { findTicket } from './services/lookup.ts';
+import { remoteReport, fetchRemotes } from './services/remote.ts';
 import { buildPipeline } from './services/pipeline.ts';
 import { buildMatrix } from './services/matrix.ts';
 import { simulateCherryPick } from './services/dryrun.ts';
@@ -217,6 +219,41 @@ router.post('/repos/:id/merge', async (req, res) => {
       dryRun: body.dryRun,
     });
     res.json({ ...result, preview: previewCommands(result.commands) });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+const ticketSchema = z
+  .string()
+  .min(2)
+  .max(64)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, 'Not a ticket id');
+
+router.get('/repos/:id/find', async (req, res) => {
+  try {
+    const ticket = ticketSchema.parse(req.query.ticket);
+    const repo = await resolveRepo(req.params.id);
+    res.json(await findTicket(repo.path, ticket));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.get('/repos/:id/remote', async (req, res) => {
+  try {
+    const repo = await resolveRepo(req.params.id);
+    res.json(await remoteReport(repo.path));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+/** Reaches the network, so it only ever happens when explicitly requested. */
+router.post('/repos/:id/fetch', async (req, res) => {
+  try {
+    const repo = await resolveRepo(req.params.id);
+    res.json(await fetchRemotes(repo.path));
   } catch (err) {
     fail(res, err);
   }

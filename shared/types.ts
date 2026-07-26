@@ -251,6 +251,54 @@ export interface CleanupReport {
   generatedAt: string;
 }
 
+export interface RemoteStatus {
+  branch: string;
+  /** e.g. "origin/stable", or null when the branch tracks nothing. */
+  upstream: string | null;
+  /** Commits the local branch has that the remote does not — what to push. */
+  ahead: number;
+  /** Commits the remote has that the local branch does not. */
+  behind: number;
+}
+
+export interface RemoteReport {
+  branches: RemoteStatus[];
+  remotes: string[];
+  /** Remote-tracking refs go stale; this says when they were last updated. */
+  lastFetchedAt: string | null;
+  hasRemote: boolean;
+}
+
+export interface TicketSighting {
+  commit: CommitInfo;
+  /**
+   * Local branches this commit is reachable from. Broad: a branch cut after the
+   * work merged contains it too, without having anything to do with it.
+   */
+  branches: string[];
+  /**
+   * Branches where this commit is part of the branch's *own* work — where it was
+   * written, rather than merely inherited.
+   */
+  ownedBy: string[];
+  /** Chain branches that contain it, in chain order. */
+  onChain: string[];
+  /** Carries a `(cherry picked from ...)` trailer, so it is a copy. */
+  isCopy: boolean;
+  copiedFrom?: string;
+}
+
+export interface TicketLookup {
+  ticket: string;
+  /** Every commit mentioning the ticket, newest first. */
+  sightings: TicketSighting[];
+  /** Chain branch -> whether any commit for this ticket is on it. */
+  chainStatus: Record<string, boolean>;
+  /** Non-chain branches where the work lives. */
+  sourceBranches: string[];
+  truncated: boolean;
+}
+
 export interface SimulationResult {
   target: string;
   clean: boolean;

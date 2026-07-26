@@ -194,7 +194,7 @@ export function makeFixture(dir) {
 }
 
 export function cleanupFixture(repo) {
-  rmSync(repo, { recursive: true, force: true, maxRetries: 3 });
+  rmSync(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('make-fixture.mjs')) {

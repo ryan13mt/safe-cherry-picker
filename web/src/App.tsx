@@ -8,6 +8,7 @@ import type {
   OpStatus,
   ConflictReport,
   CleanupReport,
+  RemoteReport,
 } from '../../shared/types.ts';
 import { PipelineView } from './views/PipelineView.tsx';
 import { ReleaseMatrixView } from './views/ReleaseMatrix.tsx';
@@ -15,11 +16,12 @@ import { OpDialog, type OpPlan } from './components/OpDialog.tsx';
 import { ConflictViewer } from './components/ConflictViewer.tsx';
 import { FolderPicker } from './components/FolderPicker.tsx';
 import { CleanupView } from './views/CleanupView.tsx';
+import { FindTicket } from './views/FindTicket.tsx';
 import { CommandLog } from './components/CommandLog.tsx';
 import { CopyButton } from './components/CopyButton.tsx';
 import { buildReleaseNotes } from './releaseNotes.ts';
 
-type Tab = 'pipeline' | 'matrix' | 'cleanup';
+type Tab = 'pipeline' | 'matrix' | 'find' | 'cleanup';
 
 type PendingOp =
   | { kind: 'cherry-pick'; target: string; commits: string[] }
@@ -59,6 +61,8 @@ export function App() {
   const [opStatus, setOpStatus] = useState<OpStatus | null>(null);
   const [conflicts, setConflicts] = useState<ConflictReport | null>(null);
   const [cleanup, setCleanup] = useState<CleanupReport | null>(null);
+  const [remote, setRemote] = useState<RemoteReport | null>(null);
+  const [fetching, setFetching] = useState(false);
   const [plan, setPlan] = useState<{ plan: OpPlan; op: PendingOp } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -299,6 +303,33 @@ export function App() {
     };
   }, [repoId, tab === 'cleanup', opStatus?.inProgress]);
 
+  // Reads local remote-tracking refs only — no network until Fetch is pressed.
+  useEffect(() => {
+    if (!repoId) return;
+    let cancelled = false;
+    setRemote(null);
+    api
+      .remote(repoId)
+      .then((r) => !cancelled && setRemote(r))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [repoId, opStatus?.inProgress]);
+
+  const doFetch = async () => {
+    setFetching(true);
+    setError(null);
+    try {
+      setRemote(await api.fetch(repoId));
+      setToast('Fetched. Remote-tracking refs are up to date; nothing was merged or pushed.');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setFetching(false);
+    }
+  };
+
   const removeBranch = async (name: string) => {
     setBusy(true);
     setError(null);
@@ -387,6 +418,9 @@ export function App() {
           <button className={tab === 'matrix' ? 'tab active' : 'tab'} onClick={() => setTab('matrix')}>
             Release matrix
             {outstandingTickets > 0 && <span className="tab-badge">{outstandingTickets}</span>}
+          </button>
+          <button className={tab === 'find' ? 'tab active' : 'tab'} onClick={() => setTab('find')}>
+            Find ticket
           </button>
           <button className={tab === 'cleanup' ? 'tab active' : 'tab'} onClick={() => setTab('cleanup')}>
             Cleanup
@@ -522,9 +556,16 @@ export function App() {
           <PipelineView
             report={pipeline}
             blocked={repo?.blocked ?? false}
+            remote={remote}
+            fetching={fetching}
+            onFetch={doFetch}
             onPromote={(from, into) => openMerge(from, into, false)}
             onBackMerge={(from, into) => openMerge(from, into, true)}
           />
+        )}
+
+        {tab === 'find' && repoId && (
+          <FindTicket repoId={repoId} chain={pipeline?.chain ?? []} />
         )}
 
         {tab === 'cleanup' &&

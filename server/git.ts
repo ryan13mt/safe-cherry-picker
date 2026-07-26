@@ -30,6 +30,10 @@ const READ_SUBCOMMANDS = new Set([
   'ls-files',
   'blame',
   'var',
+  // Reaches the network, but only ever moves refs/remotes — see the fetch
+  // rules in assertAllowed, which forbid the refspec forms that could write a
+  // local branch.
+  'fetch',
 ]);
 
 /** Mutating subcommands. Callers must pass `write: true` to reach these. */
@@ -76,7 +80,6 @@ const DUAL_SUBCOMMANDS = new Set(['branch', 'worktree', 'config']);
 const DENIED_SUBCOMMANDS = new Set([
   'push',
   'pull',
-  'fetch',
   'remote',
   'rebase',
   'filter-branch',
@@ -138,6 +141,12 @@ export interface GitOptions {
    * have confirmed the work is released first; nothing else may set this.
    */
   forceDelete?: boolean;
+  /**
+   * Unlocks `git fetch`. Reaching the network is never implicit: the user asks
+   * for it, so the caller has to say so. Fetch only moves remote-tracking refs —
+   * `push` and `pull` remain refused outright.
+   */
+  network?: boolean;
   /** Return the non-zero result instead of throwing. */
   allowFail?: boolean;
   timeoutMs?: number;
@@ -270,6 +279,29 @@ export function assertAllowed(args: string[], opts: GitOptions): void {
       throw new GitPolicyError(
         `git ${sub} requires the caller to opt in with scratch: true.`,
       );
+    }
+  }
+
+  if (sub === 'fetch') {
+    if (!opts.network) {
+      throw new GitPolicyError('git fetch reaches the network; the caller must opt in with network: true.');
+    }
+    // `git fetch origin main:main` updates a *local* branch. Permit only a bare
+    // remote name plus known-harmless flags, so fetch can never write a ref
+    // outside refs/remotes.
+    const allowedFlags = new Set(['--quiet', '-q', '--prune', '-p', '--no-tags']);
+    for (const arg of args.slice(args.indexOf('fetch') + 1)) {
+      if (arg.startsWith('-')) {
+        if (!allowedFlags.has(arg)) {
+          throw new GitPolicyError(`git fetch ${arg} is not permitted.`);
+        }
+        continue;
+      }
+      if (arg.includes(':')) {
+        throw new GitPolicyError(
+          'Refusing a fetch refspec: it could write a local branch. Only a bare remote name is allowed.',
+        );
+      }
     }
   }
 

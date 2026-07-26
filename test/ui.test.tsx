@@ -285,7 +285,15 @@ describe('copy affordances', () => {
 describe('pipeline view', () => {
   it('renders a promote and a back-merge control per leg', () => {
     const html = renderToStaticMarkup(
-      <PipelineView report={pipeline} blocked={false} onPromote={() => {}} onBackMerge={() => {}} />,
+      <PipelineView
+        report={pipeline}
+        blocked={false}
+        remote={null}
+        fetching={false}
+        onFetch={() => {}}
+        onPromote={() => {}}
+        onBackMerge={() => {}}
+      />,
     );
     expect(html).toContain('develop');
     expect(html).toContain('stable');

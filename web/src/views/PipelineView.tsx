@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { PipelineReport, CommitInfo } from '../../../shared/types.ts';
+import type { PipelineReport, CommitInfo, RemoteReport } from '../../../shared/types.ts';
 
 /**
  * The promotion board. Each leg shows both directions, because the number that
@@ -25,16 +25,23 @@ function CommitList({ commits }: { commits: CommitInfo[] }) {
 export function PipelineView({
   report,
   blocked,
+  remote,
+  fetching,
+  onFetch,
   onPromote,
   onBackMerge,
 }: {
   report: PipelineReport;
   /** Uncommitted changes present: drift is still shown, actions are not offered. */
   blocked: boolean;
+  remote: RemoteReport | null;
+  fetching: boolean;
+  onFetch: () => void;
   onPromote: (from: string, into: string) => void;
   onBackMerge: (from: string, into: string) => void;
 }) {
   const blockedTitle = blocked ? 'Blocked: the repository has uncommitted changes' : undefined;
+  const unpushed = remote?.branches.filter((b) => b.ahead > 0) ?? [];
   const [open, setOpen] = useState<string | null>(null);
 
   if (report.chain.length < 2) {
@@ -51,6 +58,38 @@ export function PipelineView({
 
   return (
     <div className="pipeline">
+      {remote?.hasRemote && (
+        <div className="remote-bar">
+          <span className="muted small">
+            {unpushed.length === 0 ? (
+              'Everything is pushed.'
+            ) : (
+              <>
+                <strong className="warn-text">Not pushed:</strong>{' '}
+                {unpushed.map((b) => `${b.branch} +${b.ahead}`).join(', ')}
+              </>
+            )}
+            {remote.branches.some((b) => b.behind > 0) && (
+              <>
+                {' · '}
+                <span className="warn-text">
+                  behind: {remote.branches.filter((b) => b.behind > 0).map((b) => `${b.branch} −${b.behind}`).join(', ')}
+                </span>
+              </>
+            )}
+          </span>
+          <span className="spacer" />
+          <span className="muted small">
+            {remote.lastFetchedAt
+              ? `fetched ${new Date(remote.lastFetchedAt).toLocaleString()}`
+              : 'never fetched — counts may be stale'}
+          </span>
+          <button className="ghost small" onClick={onFetch} disabled={fetching}>
+            {fetching ? 'Fetching…' : 'Fetch'}
+          </button>
+        </div>
+      )}
+
       {report.legs.map((leg) => {
         const aheadKey = `${leg.upstream}->${leg.downstream}`;
         const behindKey = `${leg.downstream}->${leg.upstream}`;

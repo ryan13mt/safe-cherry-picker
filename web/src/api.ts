@@ -9,6 +9,8 @@ import type {
   BrowseResult,
   ScanInfo,
   CleanupReport,
+  TicketLookup,
+  RemoteReport,
   GitCommandRecord,
 } from '../../shared/types.ts';
 
@@ -74,6 +76,10 @@ export const api = {
   ) => post<OpResponse>(`/repos/${id}/cherry-pick`, body),
   merge: (id: string, body: { from: string; into: string; noFf?: boolean; dryRun?: boolean }) =>
     post<OpResponse>(`/repos/${id}/merge`, body),
+  find: (id: string, ticket: string) =>
+    request<TicketLookup>(`/repos/${id}/find?ticket=${encodeURIComponent(ticket)}`),
+  remote: (id: string) => request<RemoteReport>(`/repos/${id}/remote`),
+  fetch: (id: string) => post<RemoteReport>(`/repos/${id}/fetch`, {}),
   cleanup: (id: string) => request<CleanupReport>(`/repos/${id}/cleanup`),
   deleteBranch: (id: string, name: string) =>
     post<{ name: string; deleted: string; preview: string[] }>(`/repos/${id}/delete-branch`, { name }),

@@ -194,6 +194,40 @@ Dry runs and all read-only views also stay available.
 | `tracked` | Only modifications block; stray untracked files are tolerated |
 | `off` | No check |
 
+### Find ticket — "where is PAY-1042?"
+
+The release matrix goes branch → tickets. This goes the other way, which is the direction
+the question is usually asked in: QA says *"is PAY-1042 in stable yet?"* and doesn't know
+or care which branch it started on.
+
+Type a ticket id and get every commit mentioning it, which branches contain each one, and
+a per-chain-branch verdict. Cherry-picked copies are marked as copies and name their
+source, so you can see the original on the feature branch *and* where it has been picked
+to.
+
+This searches commit messages rather than running the classifier, which is the point: a
+cherry-picked copy keeps the original subject, so one search finds the original and every
+copy. The trade-off is stated in the UI — a squash that rewrote the subject and dropped
+the id will be missed, and the release matrix is what catches those.
+
+### Remote awareness
+
+The pipeline view shows how far each chain branch has drifted from its upstream:
+*"Not pushed: stable +3"*, or which branches are behind. It closes the loop the app
+otherwise leaves open — it moves local branches and then goes quiet, leaving you to
+remember what still needs pushing.
+
+**Fetching is never automatic.** Remote-tracking refs go stale the moment someone else
+pushes, so reaching the network on page load would be both surprising and slow. There's a
+Fetch button, and the bar says when it last ran so you know how much to trust the numbers.
+
+`fetch` was previously refused outright along with `push` and `pull`. It's now permitted
+because it only moves `refs/remotes` — but the policy layer is strict about it, since
+`git fetch origin main:main` writes a *local* branch. Only a bare remote name and a short
+list of vetted flags are accepted; any refspec is refused. `push` and `pull` remain
+denied, and the network opt-in unlocks nothing else. A test asserts that fetching leaves
+every local branch untouched.
+
 ### Who did what
 
 Each ticket in the matrix names the people who wrote its commits, with a count —
@@ -376,6 +410,11 @@ history: a merged branch, plain cherry-picks, a `-x` pick, a squash merge, a hot
 stranded on prod, interleaved tickets, a lowercase prefix, an id mentioned mid-subject,
 and a branch with no id in its name. This drives the classifier, grouping, base
 selection, pipeline and view tests.
+
+Throwaway repos are swept before and after a run by `test/global-setup.ts`, which only
+touches directories over an hour old. That age guard is deliberate: two suites running at
+once — or a stray `rm` on the same prefixes — would otherwise delete the live fixtures of
+a run in progress, and the victim fails in a way that looks exactly like a flaky test.
 
 **A repo builder** (`test/repo-builder.ts`) for edge cases, where each test constructs
 the smallest history that produces the situation. Covered:

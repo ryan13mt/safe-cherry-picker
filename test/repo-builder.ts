@@ -147,7 +147,9 @@ export class RepoBuilder {
 
   dispose(): void {
     try {
-      rmSync(this.path, { recursive: true, force: true, maxRetries: 3 });
+      // The retry delay matters on Windows: a just-exited git process can hold
+      // the worktree for a few more milliseconds.
+      rmSync(this.path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     } catch {
       // Windows sometimes holds a worktree handle; a stray temp dir is not
       // worth failing a run over.
