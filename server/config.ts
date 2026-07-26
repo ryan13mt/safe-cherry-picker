@@ -17,6 +17,11 @@ export interface AppConfig {
    *  'off'     — no check
    */
   blockOnDirty: 'any' | 'tracked' | 'off';
+  /**
+   * Unreleased work older than this is flagged as stale. Defaults to 14 days,
+   * one promotion cycle — work that has missed a whole release is worth seeing.
+   */
+  staleAfterDays: number;
   maxBranchCommits: number;
   maxTargetIndexCommits: number;
   ticketPattern: string;
@@ -30,6 +35,7 @@ const defaults: AppConfig = {
   scanDepth: 3,
   chain: ['develop', 'stable', 'prod'],
   blockOnDirty: 'any',
+  staleAfterDays: 14,
   maxBranchCommits: 1000,
   maxTargetIndexCommits: 5000,
   ticketPattern: '^\\s*\\[([A-Za-z][A-Za-z0-9]*-\\d+)\\]',

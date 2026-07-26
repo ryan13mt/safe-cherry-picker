@@ -14,6 +14,7 @@ import { browse, validateScanRoot } from './services/browse.ts';
 import { buildCleanupReport, deleteBranch } from './services/cleanup.ts';
 import { findTicket } from './services/lookup.ts';
 import { remoteReport, fetchRemotes } from './services/remote.ts';
+import { buildHotspotReport } from './services/hotspots.ts';
 import { buildPipeline } from './services/pipeline.ts';
 import { buildMatrix } from './services/matrix.ts';
 import { simulateCherryPick } from './services/dryrun.ts';
@@ -254,6 +255,15 @@ router.post('/repos/:id/fetch', async (req, res) => {
   try {
     const repo = await resolveRepo(req.params.id);
     res.json(await fetchRemotes(repo.path));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+router.get('/repos/:id/hotspots', async (req, res) => {
+  try {
+    const repo = await resolveRepo(req.params.id);
+    res.json(await buildHotspotReport(repo.path));
   } catch (err) {
     fail(res, err);
   }

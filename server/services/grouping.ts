@@ -58,20 +58,28 @@ export function extractTicket(subject: string, branchName?: string | null): Tick
 export function summariseGroup(
   commits: ClassifiedCommit[],
   target: string,
+  now = Date.now(),
 ): GroupTargetSummary {
   let releasedCount = 0;
   let likelyCount = 0;
   const missing: string[] = [];
+  // How long the work has been waiting: the oldest commit that still hasn't
+  // reached this branch. Written weeks ago and still not shipped is the thing
+  // worth noticing.
+  let oldestMissing: number | undefined;
 
   for (const c of commits) {
     const status: ReleaseStatus | undefined = c.status[target];
     if (status?.released) {
       releasedCount++;
-    } else if (status && status.confidence === 'low') {
-      likelyCount++;
-      missing.push(c.commit.sha);
-    } else {
-      missing.push(c.commit.sha);
+      continue;
+    }
+    if (status && status.confidence === 'low') likelyCount++;
+    missing.push(c.commit.sha);
+
+    const written = Date.parse(c.commit.date);
+    if (Number.isFinite(written) && (oldestMissing === undefined || written < oldestMissing)) {
+      oldestMissing = written;
     }
   }
 
@@ -92,7 +100,20 @@ export function summariseGroup(
     state = 'partial';
   }
 
-  return { state, releasedCount, likelyCount, pendingCount, total, missing };
+  const waitingDays =
+    oldestMissing === undefined ? undefined : Math.max(0, Math.floor((now - oldestMissing) / 86_400_000));
+
+  return {
+    state,
+    releasedCount,
+    likelyCount,
+    pendingCount,
+    total,
+    missing,
+    waitingSince: oldestMissing === undefined ? undefined : new Date(oldestMissing).toISOString(),
+    waitingDays,
+    stale: waitingDays !== undefined && waitingDays >= loadConfig().staleAfterDays,
+  };
 }
 
 const STATE_RANK: Record<GroupState, number> = {

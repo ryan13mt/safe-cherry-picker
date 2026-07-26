@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import type {
+  GroupTargetSummary,
   ReleaseMatrix as Matrix,
   SimulationResult,
   TicketDependency,
@@ -67,6 +68,30 @@ function DependencyNote({ deps, target }: { deps: TicketDependency[]; target: st
     >
       {hard.length ? '⚠ needs' : '~ overlaps'} {deps.map((d) => d.label).join(', ')}
       {` (not on ${target})`}
+    </span>
+  );
+}
+
+function waitLabel(days: number): string {
+  if (days === 0) return 'today';
+  if (days === 1) return '1 day';
+  if (days < 60) return `${days} days`;
+  return `${Math.round(days / 30)} months`;
+}
+
+/** How long this ticket has been waiting to reach the chosen branch. */
+function Waiting({ summary, target }: { summary?: GroupTargetSummary; target: string }) {
+  if (!summary?.waitingDays || summary.state === 'released') return null;
+  return (
+    <span
+      className={summary.stale ? 'chip tone-partial' : 'muted small'}
+      title={
+        `Oldest unreleased commit was written ${new Date(summary.waitingSince!).toLocaleDateString()}.` +
+        (summary.stale ? `\nPast the staleAfterDays threshold — it has missed a release cycle.` : '')
+      }
+    >
+      {summary.stale ? '⏳ ' : ''}
+      waiting {waitLabel(summary.waitingDays)} for {target}
     </span>
   );
 }
@@ -177,6 +202,13 @@ export function ReleaseMatrixView({
 
   const allCommits = matrix.groups.flatMap((g) => g.commits);
 
+  const stale = matrix.groups.filter((g) => g.summary[target]?.stale);
+  const staleCount = stale.length;
+  const oldestWait = stale.reduce<number | undefined>(
+    (max, g) => Math.max(max ?? 0, g.summary[target]?.waitingDays ?? 0),
+    undefined,
+  );
+
   const needle = filter.trim().toLowerCase();
   const visibleGroups = needle
     ? matrix.groups.filter(
@@ -237,6 +269,17 @@ export function ReleaseMatrixView({
           <span className="warn-text">Truncated — branch exceeds the configured commit cap.</span>
         )}
       </div>
+
+      {staleCount > 0 && (
+        <p className="stale-summary">
+          <span className="chip tone-partial">⏳ {staleCount} stale</span>
+          <span className="muted small">
+            {staleCount === 1 ? 'ticket has' : 'tickets have'} been waiting more than a release
+            cycle to reach <strong>{target}</strong>
+            {oldestWait !== undefined && ` — the longest for ${waitLabel(oldestWait)}`}.
+          </span>
+        </p>
+      )}
 
       {matrix.targets.length === 0 ? (
         <div className="empty">
@@ -306,6 +349,7 @@ export function ReleaseMatrixView({
                         </span>
                         <DiffStat group={group} />
                         <People people={group.authors} max={2} />
+                        <Waiting summary={group.summary[target]} target={target} />
                         <DependencyNote deps={unmetDependencies(matrix, group, target)} target={target} />
                       </td>
                       {matrix.targets.map((t) => {

@@ -194,6 +194,32 @@ Dry runs and all read-only views also stay available.
 | `tracked` | Only modifications block; stray untracked files are tolerated |
 | `off` | No check |
 
+### Age of unreleased work
+
+Every ticket shows how long it has been waiting to reach the branch you're picking into —
+*"waiting 2 months for stable"* — and anything past a release cycle is flagged as stale,
+with a summary line above the table. The clock runs from the **oldest** commit that hasn't
+shipped, so a ticket started weeks ago reads as waiting weeks even if it was finished
+yesterday. That's the honest number: the work has been outstanding that long.
+
+`staleAfterDays` sets the threshold, defaulting to 14 — one promotion cycle. Something that
+has missed a whole release is worth seeing.
+
+### Hotspots — files that keep causing trouble
+
+The dependency analysis already works out, for one branch, which files make one ticket
+depend on another. The Hotspots tab runs that across every feature branch and aggregates
+it, so you get a standing answer to *"why do our cherry-picks keep conflicting?"*
+
+Files are ranked by **collisions** — the number of times the file was the reason for a
+cross-ticket dependency — then by how many tickets touched it, then by churn. Hovering a
+collision count lists the exact ticket pairs (`PAY-1100 ↔ PAY-1101`). Files only one ticket
+ever touched are excluded; they can't collide with anything.
+
+Promotion branches aren't scanned: they carry everyone's work and would drown the signal.
+This is as much an architectural read as a git one — a file colliding across several
+branches is usually one doing too many jobs.
+
 ### Find ticket — "where is PAY-1042?"
 
 The release matrix goes branch → tickets. This goes the other way, which is the direction

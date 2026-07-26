@@ -11,6 +11,7 @@ import type {
   CleanupReport,
   TicketLookup,
   RemoteReport,
+  HotspotReport,
   GitCommandRecord,
 } from '../../shared/types.ts';
 
@@ -80,6 +81,7 @@ export const api = {
     request<TicketLookup>(`/repos/${id}/find?ticket=${encodeURIComponent(ticket)}`),
   remote: (id: string) => request<RemoteReport>(`/repos/${id}/remote`),
   fetch: (id: string) => post<RemoteReport>(`/repos/${id}/fetch`, {}),
+  hotspots: (id: string) => request<HotspotReport>(`/repos/${id}/hotspots`),
   cleanup: (id: string) => request<CleanupReport>(`/repos/${id}/cleanup`),
   deleteBranch: (id: string, name: string) =>
     post<{ name: string; deleted: string; preview: string[] }>(`/repos/${id}/delete-branch`, { name }),

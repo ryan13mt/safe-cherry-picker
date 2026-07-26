@@ -134,6 +134,14 @@ export interface GroupTargetSummary {
   total: number;
   /** SHAs still missing from this target — the actionable set. */
   missing: string[];
+  /**
+   * Author date of the oldest commit still missing from this target: how long
+   * the work has been waiting. Absent once everything has shipped.
+   */
+  waitingSince?: string;
+  waitingDays?: number;
+  /** Past the configured staleAfterDays threshold. */
+  stale?: boolean;
 }
 
 export interface TicketFileStat {
@@ -248,6 +256,28 @@ export interface CleanupReport {
   branches: BranchReport[];
   /** Classification stopped early because there were too many branches. */
   truncated: boolean;
+  generatedAt: string;
+}
+
+export interface FileHotspot {
+  path: string;
+  /** Distinct tickets that touched this file. */
+  tickets: string[];
+  /** Branches where it was touched. */
+  branches: string[];
+  /** Lines added plus removed, across everything scanned. */
+  churn: number;
+  /** Times this file was the reason one ticket depended on another. */
+  collisions: number;
+  /** Distinct ticket pairs that collided here. */
+  pairs: string[];
+}
+
+export interface HotspotReport {
+  files: FileHotspot[];
+  branchesScanned: string[];
+  /** Branches skipped because the scan hit its cap. */
+  skipped: string[];
   generatedAt: string;
 }
 

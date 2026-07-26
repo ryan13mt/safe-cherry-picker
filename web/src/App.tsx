@@ -9,6 +9,7 @@ import type {
   ConflictReport,
   CleanupReport,
   RemoteReport,
+  HotspotReport,
 } from '../../shared/types.ts';
 import { PipelineView } from './views/PipelineView.tsx';
 import { ReleaseMatrixView } from './views/ReleaseMatrix.tsx';
@@ -17,11 +18,12 @@ import { ConflictViewer } from './components/ConflictViewer.tsx';
 import { FolderPicker } from './components/FolderPicker.tsx';
 import { CleanupView } from './views/CleanupView.tsx';
 import { FindTicket } from './views/FindTicket.tsx';
+import { HotspotsView } from './views/HotspotsView.tsx';
 import { CommandLog } from './components/CommandLog.tsx';
 import { CopyButton } from './components/CopyButton.tsx';
 import { buildReleaseNotes } from './releaseNotes.ts';
 
-type Tab = 'pipeline' | 'matrix' | 'find' | 'cleanup';
+type Tab = 'pipeline' | 'matrix' | 'find' | 'hotspots' | 'cleanup';
 
 type PendingOp =
   | { kind: 'cherry-pick'; target: string; commits: string[] }
@@ -61,6 +63,7 @@ export function App() {
   const [opStatus, setOpStatus] = useState<OpStatus | null>(null);
   const [conflicts, setConflicts] = useState<ConflictReport | null>(null);
   const [cleanup, setCleanup] = useState<CleanupReport | null>(null);
+  const [hotspots, setHotspots] = useState<HotspotReport | null>(null);
   const [remote, setRemote] = useState<RemoteReport | null>(null);
   const [fetching, setFetching] = useState(false);
   const [plan, setPlan] = useState<{ plan: OpPlan; op: PendingOp } | null>(null);
@@ -303,6 +306,20 @@ export function App() {
     };
   }, [repoId, tab === 'cleanup', opStatus?.inProgress]);
 
+  // Scanning every branch is not free, so only when the tab is actually open.
+  useEffect(() => {
+    if (tab !== 'hotspots' || !repoId) return;
+    let cancelled = false;
+    setHotspots(null);
+    api
+      .hotspots(repoId)
+      .then((r) => !cancelled && setHotspots(r))
+      .catch((e) => !cancelled && setError(e.message));
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, repoId]);
+
   // Reads local remote-tracking refs only — no network until Fetch is pressed.
   useEffect(() => {
     if (!repoId) return;
@@ -421,6 +438,9 @@ export function App() {
           </button>
           <button className={tab === 'find' ? 'tab active' : 'tab'} onClick={() => setTab('find')}>
             Find ticket
+          </button>
+          <button className={tab === 'hotspots' ? 'tab active' : 'tab'} onClick={() => setTab('hotspots')}>
+            Hotspots
           </button>
           <button className={tab === 'cleanup' ? 'tab active' : 'tab'} onClick={() => setTab('cleanup')}>
             Cleanup
@@ -567,6 +587,13 @@ export function App() {
         {tab === 'find' && repoId && (
           <FindTicket repoId={repoId} chain={pipeline?.chain ?? []} />
         )}
+
+        {tab === 'hotspots' &&
+          (hotspots ? (
+            <HotspotsView report={hotspots} />
+          ) : (
+            <div className="empty">Scanning branches for shared files…</div>
+          ))}
 
         {tab === 'cleanup' &&
           (cleanup ? (
